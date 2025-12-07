@@ -1,242 +1,278 @@
-// src/weather/weather.service.ts
-import { Injectable, BadRequestException } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
-import { firstValueFrom } from 'rxjs';
-import { GeocodingService } from '../geocoding/geocoding.service';
-import { GetWeatherQueryDto } from './get-weather-query.dto';
+import { Injectable, Logger } from '@nestjs/common';
+import axios from 'axios';
+import * as turf from '@turf/turf';
+import { addDays, formatISO } from 'date-fns';
 
-// ---------- Local Types (no external imports) ----------
-
-interface WeatherCurrent {
-  temperature: number;      // °C
-  humidity: number;         // %
-  windSpeed: number;        // m/s
-  precipitation: number;    // mm
-  summary: string;
-}
-
-interface DailyRange {
-  date: string;
-  min: number;
-  max: number;
-}
-
-interface DailySeries {
-  dates: string[];
-  values: number[];
-}
-
-export interface WeatherAnalysisResponse {
-  location: {
-    name: string;
-    latitude: number;
-    longitude: number;
-    timezone: string;
-  };
-  current: WeatherCurrent;
-  forecast7d: {
-    temperature: DailyRange[];      // next 7 days
-    precipitation: DailySeries;     // next 7 days
-  };
-  history30d: {
-    temperature: DailyRange[];      // last 30 days
-    precipitation: DailySeries;     // last 30 days
-  };
-}
-
-// Query type used internally (same fields as DTO)
-interface WeatherLocationParams {
-  country?: string;
-  state?: string;
-  city?: string;
-  village?: string;
-  lat?: number;
-  lon?: number;
-}
+// Type for sampled point results
+type SampleResult = {
+  lat: number;
+  lon: number;
+  data: any;
+};
 
 @Injectable()
 export class WeatherService {
-  constructor(
-    private readonly http: HttpService,
-    private readonly geocodingService: GeocodingService,
-  ) {}
+  private readonly logger = new Logger(WeatherService.name);
+  private readonly OPEN_METEO_BASE = 'https://api.open-meteo.com/v1/forecast';
+  private readonly DEFAULT_TIMEZONE = 'UTC';
+  private readonly MAX_SAMPLES = 5;
 
-  // -------------------------------------------------------
-  // PUBLIC: Main entry for controller
-  // -------------------------------------------------------
-  async getWeather(query: GetWeatherQueryDto): Promise<WeatherAnalysisResponse> {
-    // 1️⃣ Resolve lat/lon + human-readable name
-    const { lat, lon, resolvedName } = await this.resolveLocation(query);
+  async getWeatherForArea(opts: {
+    latitude?: number;
+    longitude?: number;
+    polygon?: any;
+    timezone?: string;
+  }): Promise<any> {
+    const timezone = opts.timezone ?? this.DEFAULT_TIMEZONE;
 
-    // 2️⃣ Call Open-Meteo weather API (current + 7d + 30d)
-    const url = 'https://api.open-meteo.com/v1/forecast';
+    if (opts.polygon) {
+      const samples = this.samplePointsFromPolygon(opts.polygon, this.MAX_SAMPLES);
+      const results: SampleResult[] = [];
 
-    const { data } = await firstValueFrom(
-      this.http.get(url, {
-        params: {
-          latitude: lat,
-          longitude: lon,
-          timezone: 'auto',
-          // current
-          current:
-            'temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m',
-          // daily for forecast and history
-          daily:
-            'temperature_2m_max,temperature_2m_min,precipitation_sum',
-          forecast_days: 7,
-          past_days: 30,
+      for (const [lon, lat] of samples) {
+        const res = await this.fetchPointWeather(lat, lon, timezone);
+        results.push({ lat, lon, data: res });
+      }
+
+      const aggregated = this.aggregateSampleResults(results);
+      return {
+        type: 'polygon',
+        samplePoints: results.map(r => ({ lat: r.lat, lon: r.lon })),
+        aggregated,
+      };
+    } else {
+      const lat = opts.latitude!;
+      const lon = opts.longitude!;
+      const data = await this.fetchPointWeather(lat, lon, timezone);
+      return {
+        type: 'point',
+        location: { latitude: lat, longitude: lon },
+        data,
+      };
+    }
+  }
+
+  // samplePointsFromPolygon returns array of [lon, lat] coordinates (GeoJSON convention)
+  private samplePointsFromPolygon(polygonGeoJSON: any, maxSamples = 5): Array<[number, number]> {
+    try {
+      const bbox = turf.bbox(polygonGeoJSON);
+      const width = bbox[2] - bbox[0];
+      const cellSide = Math.max(0.02, Math.min(0.75, width / 6));
+      const grid = turf.pointGrid(bbox, cellSide, { units: 'kilometers' });
+
+      const ptsInsideFC = turf.pointsWithinPolygon(grid, polygonGeoJSON);
+      const coords = ptsInsideFC.features.map(f => f.geometry.coordinates as [number, number]);
+
+      if (coords.length === 0) {
+        const c = turf.centroid(polygonGeoJSON).geometry.coordinates as [number, number];
+        return [c];
+      }
+
+      if (coords.length <= maxSamples) return coords.slice(0, maxSamples);
+
+      const step = Math.floor(coords.length / maxSamples) || 1;
+      const sampled: Array<[number, number]> = [];
+      for (let i = 0; sampled.length < maxSamples && i < coords.length; i += step) {
+        sampled.push(coords[i]);
+      }
+      return sampled.slice(0, maxSamples);
+    } catch (err) {
+      this.logger.warn('samplePointsFromPolygon failed, falling back to centroid', err);
+      try {
+        const c = turf.centroid(polygonGeoJSON).geometry.coordinates as [number, number];
+        return [c];
+      } catch (e) {
+        throw new Error('Invalid polygon GeoJSON provided');
+      }
+    }
+  }
+
+  // Fetch combined data for a point (lat, lon)
+  private async fetchPointWeather(lat: number, lon: number, timezone: string): Promise<any> {
+    try {
+      const today = new Date();
+      const endDate = formatISO(today, { representation: 'date' }); // YYYY-MM-DD
+      const startDate = formatISO(addDays(today, -30), { representation: 'date' });
+
+      const hourlyParams = [
+        'temperature_2m',
+        'relativehumidity_2m',
+        'apparent_temperature',
+        'precipitation',
+        'surface_pressure',
+        'windspeed_10m',
+        'winddirection_10m'
+      ].join(',');
+
+      const dailyParams = [
+        'temperature_2m_max',
+        'temperature_2m_min',
+        'precipitation_sum',
+        'sunrise',
+        'sunset'
+      ].join(',');
+
+      const urlRange = `${this.OPEN_METEO_BASE}?latitude=${lat}&longitude=${lon}` +
+        `&hourly=${hourlyParams}` +
+        `&daily=${dailyParams}` +
+        `&start_date=${startDate}&end_date=${endDate}` +
+        `&timezone=${encodeURIComponent(timezone)}`;
+
+      this.logger.debug(`Open-Meteo range URL: ${urlRange}`);
+      const respRange = await axios.get(urlRange, { timeout: 15000 });
+      const payloadRange = respRange.data;
+
+      const forecast7 = await this.fetch7DayForecast(lat, lon, timezone);
+
+      const current = this.computeCurrentFromPayload(payloadRange);
+
+      const history30 = {
+        start_date: startDate,
+        end_date: endDate,
+        hourly: payloadRange.hourly ?? null,
+      };
+
+      return {
+        metadata: {
+          timezone: payloadRange.timezone ?? timezone,
+          open_meteo_response_keys: Object.keys(payloadRange || {}),
         },
-      }),
-    );
-
-    const timezone: string = data.timezone;
-
-    // ---------- CURRENT ----------
-    const current: WeatherCurrent = {
-      temperature: data.current.temperature_2m,
-      humidity: data.current.relative_humidity_2m,
-      windSpeed: data.current.wind_speed_10m,
-      precipitation: data.current.precipitation,
-      summary: this.buildSummary(
-        data.current.temperature_2m,
-        data.current.relative_humidity_2m,
-        data.current.wind_speed_10m,
-      ),
-    };
-
-    // ---------- DAILY ARRAYS ----------
-    const dailyDates: string[] = data.daily.time; // already YYYY-MM-DD
-    const dailyMaxTemp: number[] = data.daily.temperature_2m_max;
-    const dailyMinTemp: number[] = data.daily.temperature_2m_min;
-    const dailyPrecip: number[] = data.daily.precipitation_sum;
-
-    // Open-Meteo returns past + future days together when past_days is used.
-    // We requested past_days=30 and forecast_days=7 → total 37 days.
-    //
-    // We'll split into:
-    // - history30d: first 30 entries
-    // - forecast7d: last 7 entries
-
-    const totalDays = dailyDates.length;
-    if (totalDays < 37) {
-      // Safety check: if API returns fewer days than expected
-      // we try a best-effort split at the end.
-      throw new BadRequestException(
-        `Unexpected Open-Meteo daily length: got ${totalDays}, expected >= 37`,
-      );
+        current,
+        hourly: payloadRange.hourly ?? null,
+        dailyRange: payloadRange.daily ?? null,
+        forecast7,
+        history30,
+      };
+    } catch (err) {
+      this.logger.error('fetchPointWeather error', err?.response?.data ?? err.message ?? err);
+      throw err;
     }
-
-    const historyCount = 30;
-    const forecastCount = 7;
-
-    const historyDates = dailyDates.slice(0, historyCount);
-    const historyMaxTemp = dailyMaxTemp.slice(0, historyCount);
-    const historyMinTemp = dailyMinTemp.slice(0, historyCount);
-    const historyPrecip = dailyPrecip.slice(0, historyCount);
-
-    const forecastDates = dailyDates.slice(-forecastCount);
-    const forecastMaxTemp = dailyMaxTemp.slice(-forecastCount);
-    const forecastMinTemp = dailyMinTemp.slice(-forecastCount);
-    const forecastPrecip = dailyPrecip.slice(-forecastCount);
-
-    const forecast7dTemp: DailyRange[] = forecastDates.map((d, idx) => ({
-      date: d,
-      min: forecastMinTemp[idx],
-      max: forecastMaxTemp[idx],
-    }));
-
-    const forecast7dPrecip: DailySeries = {
-      dates: forecastDates,
-      values: forecastPrecip,
-    };
-
-    const history30dTemp: DailyRange[] = historyDates.map((d, idx) => ({
-      date: d,
-      min: historyMinTemp[idx],
-      max: historyMaxTemp[idx],
-    }));
-
-    const history30dPrecip: DailySeries = {
-      dates: historyDates,
-      values: historyPrecip,
-    };
-
-    // ---------- FINAL SHAPE ----------
-    return {
-      location: {
-        name: resolvedName,
-        latitude: lat,
-        longitude: lon,
-        timezone,
-      },
-      current,
-      forecast7d: {
-        temperature: forecast7dTemp,
-        precipitation: forecast7dPrecip,
-      },
-      history30d: {
-        temperature: history30dTemp,
-        precipitation: history30dPrecip,
-      },
-    };
   }
 
-  // -------------------------------------------------------
-  // Location resolver: country/state/city/village OR lat/lon
-  // -------------------------------------------------------
-  private async resolveLocation(params: WeatherLocationParams) {
-    const { country, state, city, village, lat, lon } = params;
+  private computeCurrentFromPayload(payload: any): any {
+    try {
+      const now = new Date();
+      const times: string[] = payload?.hourly?.time ?? [];
+      if (!times || times.length === 0) return null;
 
-    // 1️⃣ If any text-based location is provided → use geocoding
-    if (country || state || city || village) {
-      const parts = [village, city, state, country].filter(Boolean);
-      const locationQuery = parts.join(', ');
+      // find index of latest time <= now
+      let idx = times.length - 1;
+      for (let i = 0; i < times.length; i++) {
+        const t = new Date(times[i]);
+        if (t > now) {
+          idx = Math.max(0, i - 1);
+          break;
+        }
+      }
 
-      // Use the SAME geocoding method you used for soil:
-      const { latitude, longitude, displayName } =
-        await this.geocodingService.geocodeCity(locationQuery);
-      // If your method is named differently (e.g. getCoordinates),
-      // change only the line above.
-
-      return { lat: latitude, lon: longitude, resolvedName: displayName };
+      const current: any = { time: times[idx] };
+      for (const key of Object.keys(payload.hourly)) {
+        if (key === 'time') continue;
+        const arr = payload.hourly[key];
+        current[key] = (Array.isArray(arr) && arr[idx] !== undefined) ? arr[idx] : null;
+      }
+      return current;
+    } catch (err) {
+      return null;
     }
-
-    // 2️⃣ Otherwise, lat/lon must be present
-    if (lat == null || lon == null) {
-      throw new BadRequestException(
-        'Provide either country/state/city/village or lat/lon',
-      );
-    }
-
-    return {
-      lat,
-      lon,
-      resolvedName: `${lat}, ${lon}`,
-    };
   }
 
-  // -------------------------------------------------------
-  // Helper: Basic text summary for cards
-  // -------------------------------------------------------
-  private buildSummary(
-    temperature: number,
-    humidity: number,
-    windSpeed: number,
-  ): string {
-    const parts: string[] = [];
+  // get 7-day forward forecast
+  private async fetch7DayForecast(lat: number, lon: number, timezone: string): Promise<any> {
+    const start = formatISO(new Date(), { representation: 'date' });
+    const end = formatISO(addDays(new Date(), 7), { representation: 'date' });
 
-    if (temperature <= 10) parts.push('Cold');
-    else if (temperature <= 20) parts.push('Cool');
-    else if (temperature <= 30) parts.push('Warm');
-    else parts.push('Hot');
+    const dailyParams = ['temperature_2m_max', 'temperature_2m_min', 'precipitation_sum', 'sunrise', 'sunset'].join(',');
+    const hourlyParams = ['temperature_2m', 'relativehumidity_2m', 'precipitation', 'windspeed_10m', 'winddirection_10m'].join(',');
 
-    if (humidity >= 80) parts.push('and very humid');
-    else if (humidity >= 60) parts.push('and humid');
-    else if (humidity <= 30) parts.push('and dry');
+    const url = `${this.OPEN_METEO_BASE}?latitude=${lat}&longitude=${lon}` +
+      `&daily=${dailyParams}&hourly=${hourlyParams}` +
+      `&start_date=${start}&end_date=${end}&timezone=${encodeURIComponent(timezone)}`;
 
-    if (windSpeed >= 10) parts.push('with strong winds');
-    else if (windSpeed >= 5) parts.push('with a breeze');
+    this.logger.debug(`Open-Meteo forecast7 URL: ${url}`);
+    const resp = await axios.get(url, { timeout: 15000 });
+    return resp.data;
+  }
 
-    return parts.join(' ');
+  // Simple aggregation (means) across samplePoints for numeric fields
+  private aggregateSampleResults(results: SampleResult[]): any {
+    const aggregated: any = { current: {}, sampleCount: results.length };
+
+    // numeric keys in current
+    const numericKeys = new Set<string>();
+    for (const r of results) {
+      if (r.data?.current) {
+        Object.keys(r.data.current).forEach(k => {
+          if (typeof r.data.current[k] === 'number') numericKeys.add(k);
+        });
+      }
+    }
+    for (const k of Array.from(numericKeys)) {
+      let sum = 0;
+      let count = 0;
+      for (const r of results) {
+        const v = r.data?.current?.[k];
+        if (typeof v === 'number') { sum += v; count += 1; }
+      }
+      aggregated.current[k] = count ? (sum / count) : null;
+    }
+
+    // hourly aggregation if times match
+    try {
+      const baseHourly = results[0]?.data?.hourly;
+      if (baseHourly && baseHourly.time) {
+        const time = baseHourly.time;
+        aggregated.hourly = { time: time };
+        for (const key of Object.keys(baseHourly)) {
+          if (key === 'time') continue;
+          const arrLength = baseHourly[key].length;
+          const aggArr = new Array(arrLength).fill(0);
+          const counts = new Array(arrLength).fill(0);
+
+          for (const r of results) {
+            const h = r.data?.hourly;
+            if (!h || !h[key] || h[key].length !== arrLength) { continue; }
+            for (let i = 0; i < arrLength; i++) {
+              const val = h[key][i];
+              if (typeof val === 'number') { aggArr[i] += val; counts[i] += 1; }
+            }
+          }
+          aggregated.hourly[key] = aggArr.map((s, i) => counts[i] ? s / counts[i] : null);
+        }
+      }
+    } catch (e) {
+      this.logger.warn('hourly aggregation failed', e);
+      aggregated.hourly = null;
+    }
+
+    // daily7 aggregation
+    try {
+      const baseDaily = results[0]?.data?.forecast7?.daily;
+      if (baseDaily && baseDaily.time) {
+        const days = baseDaily.time.length;
+        aggregated.daily7 = { time: baseDaily.time };
+        for (const key of Object.keys(baseDaily)) {
+          if (key === 'time') continue;
+          const arr = new Array(days).fill(0);
+          const counts = new Array(days).fill(0);
+          for (const r of results) {
+            const d = r.data?.forecast7?.daily;
+            if (!d || !d[key] || d[key].length !== days) continue;
+            for (let i = 0; i < days; i++) {
+              const val = d[key][i];
+              if (typeof val === 'number') { arr[i] += val; counts[i] += 1; }
+            }
+          }
+          aggregated.daily7[key] = arr.map((s, i) => counts[i] ? s / counts[i] : null);
+        }
+      }
+    } catch (e) {
+      this.logger.warn('daily aggregation failed', e);
+      aggregated.daily7 = null;
+    }
+
+    aggregated.history30 = results[0]?.data?.history30 ?? null;
+
+    return aggregated;
   }
 }
