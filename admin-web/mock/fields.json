@@ -1,0 +1,6 @@
+[
+  {"id":"f1","name":"Farm A","country":"India","state":"Maharashtra","district":"Pune","village":"Kolhapur","lat":18.5204,"lng":73.8567,"status":"ok","area_m2":12000},
+  {"id":"f2","name":"Farm B","country":"India","state":"Maharashtra","district":"Satara","village":"Sangli","lat":17.6599,"lng":73.9067,"status":"warning","area_m2":5500},
+  {"id":"f3","name":"Farm C","country":"India","state":"Karnataka","district":"Bengaluru","village":"Hosur","lat":12.9716,"lng":77.5946,"status":"ok","area_m2":25000},
+  {"id":"f4","name":"Farm D","country":"India","state":"Tamil Nadu","district":"Madurai","village":"Madurai","lat":9.9252,"lng":78.1198,"status":"alert","area_m2":10000}
+]

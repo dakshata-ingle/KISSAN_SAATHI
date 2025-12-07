@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+
+html, body, #__next {
+  height: 100%;
+ /** margin: 0;*/
+}
+/**
+.mapboxgl-map, .map-container {
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 6px 20px rgba(231, 240, 236, 0.06);
+}
+
+.map-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  right: 12px;
+  top: 80px;
+  position: absolute;
+  z-index: 10;
+}
+*/
+/**
+body {
+  background-color: #c2edcb;    
+  color: #0f172a;             
+  font-family: 'Poppins', system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+.map-container {
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 6px 20px rgba(2,6,23,0.06);
+  background: #fff;
+}
+.map-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: absolute;
+  right: 12px;
+  top: 80px;
+  z-index: 20;
+}
+.kpi-card {
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(2,6,23,0.06);
+}
+  */
+
