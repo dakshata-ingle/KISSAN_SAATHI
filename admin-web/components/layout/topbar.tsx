@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, RefreshCw, Bell } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-// import fields from '@/mock/fields.json'; // <-- use this if tsconfig path alias is configured
-import fields from '../../mock/fields.json'; // <-- otherwise use this relative path (adjust if needed)
+// import fields from '@/mock/fields.json';
+import fields from '../../mock/fields.json';
 
 type Field = {
   id: string;
@@ -19,6 +19,14 @@ type Field = {
   area_m2: number;
 };
 
+// Extend window type for Google Translate globals
+declare global {
+  interface Window {
+    google?: any;
+    googleTranslateElementInit?: () => void;
+  }
+}
+
 export default function Topbar() {
   const router = useRouter();
 
@@ -28,7 +36,7 @@ export default function Topbar() {
   const [district, setDistrict] = useState<string>('');
   const [village, setVillage] = useState<string>('');
 
-  // language persistence
+  // language persistence and state
   const [lang, setLang] = useState<string>(() => {
     if (typeof window === 'undefined') return 'en';
     return localStorage.getItem('ks_lang') || 'en';
@@ -37,6 +45,38 @@ export default function Topbar() {
   useEffect(() => {
     if (typeof window !== 'undefined') localStorage.setItem('ks_lang', lang);
   }, [lang]);
+
+  // Load Google Translate widget once on client
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    // Callback that the Google script will call
+    window.googleTranslateElementInit = function googleTranslateElementInit() {
+      try {
+        /* eslint-disable @typescript-eslint/no-unsafe-member-access */
+        new window.google.translate.TranslateElement(
+          { pageLanguage: 'en', autoDisplay: false },
+          'google_translate_element'
+        );
+        /* eslint-enable @typescript-eslint/no-unsafe-member-access */
+      } catch (err) {
+        // ignore initialization error
+        // console.warn('google translate init failed', err);
+      }
+    };
+
+    // Don't re-add script if already present
+    if (!document.querySelector('script[src*="translate.google.com"]')) {
+      const s = document.createElement('script');
+      s.src = '//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit';
+      s.async = true;
+      document.body.appendChild(s);
+    }
+
+    // If user has previously selected a language, set cookie so translation persists
+    // Note: changing cookie + reload is the easiest reliable way to let the Google widget apply translation.
+    // See `applyGoogleTranslate` below.
+  }, []);
 
   // search
   const [q, setQ] = useState('');
@@ -72,14 +112,13 @@ export default function Topbar() {
 
   function handleRefresh(hard = false) {
     try {
-      router.refresh(); // Next app router soft refresh
+      router.refresh();
       if (hard) window.location.reload();
     } catch (err) {
       if (hard) window.location.reload();
     }
   }
 
-  // when parent changes, clear children
   function onCountryChange(c: string) {
     setCountry(c);
     setStateName('');
@@ -98,7 +137,46 @@ export default function Topbar() {
     setVillage('');
   }
 
+  /**
+   * Apply language using Google Translate widget.
+   *
+   * NOTE / Practical limitation:
+   * - The official Google Translate webpage element typically applies translations by setting
+   *   a cookie named 'googtrans' and reloading the page (or relying on the widget to translate).
+   * - There is no official modern JS API to "change language in-place" for all setups, so this function
+   *   sets the cookie `googtrans=/en/<lang>` and then reloads the page so the widget picks it up.
+   * - This works in the classic translated widget use-cases but may have limitations for advanced SPAs.
+   */
+  function applyGoogleTranslate(targetLang: string) {
+    if (typeof document === 'undefined') return;
+
+    // store selection
+    localStorage.setItem('ks_lang', targetLang);
+    setLang(targetLang);
+
+    try {
+      // set googtrans cookie used by the translate widget: from '/en' to '/<targetLang>'
+      // Example cookie value: /en/hi
+      // Path must be '/' so Google widget can read it on any route
+      document.cookie = `googtrans=/en/${targetLang}; path=/; max-age=31536000;`;
+
+      // Some setups also use the "googtrans" key on window.localStorage or other cookies.
+      // We'll also set it on localStorage for some wrappers (harmless).
+      try {
+        localStorage.setItem('googtrans', `/en/${targetLang}`);
+      } catch (_) { /* no-op */ }
+
+      // If Google translate iframe/menu is already present we could try to interact with it,
+      // but cross-origin constraints often prevent it. So most reliable approach is to reload:
+      window.location.reload();
+    } catch (err) {
+      // fallback: if anything goes wrong, just reload (user still sees change in saved lang)
+      window.location.reload();
+    }
+  }
+
   return (
+    // NOTE: header has NO position fixed/sticky classes — it will scroll normally with page
     <header className="bg-[#e9f7ee] border-b">
       <div className="max-w-full mx-auto p-3 flex items-center gap-4">
         {/* search + filters */}
@@ -106,7 +184,6 @@ export default function Topbar() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              // keep inline search; in real app route to results or update global state
             }}
             className="flex items-center gap-3 flex-1"
           >
@@ -160,11 +237,15 @@ export default function Topbar() {
             Refresh
           </button>
 
+          {/* Language selector: uses Google Translate integration */}
           <select
             aria-label="Select language"
             className="rounded-lg border px-3 py-2"
             value={lang}
-            onChange={(e) => setLang(e.target.value)}
+            onChange={(e) => {
+              // use the translate widget approach
+              applyGoogleTranslate(e.target.value);
+            }}
           >
             <option value="en">English</option>
             <option value="hi">हिन्दी</option>
@@ -176,6 +257,9 @@ export default function Topbar() {
           </button>
         </div>
       </div>
+
+      {/* Hidden container for Google Translate widget — required for the script to initialize */}
+      <div id="google_translate_element" style={{ display: 'none' }} />
     </header>
   );
 }
