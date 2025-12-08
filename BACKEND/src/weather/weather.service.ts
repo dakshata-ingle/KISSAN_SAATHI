@@ -61,7 +61,9 @@ export class WeatherService {
       const grid = turf.pointGrid(bbox, cellSide, { units: 'kilometers' });
 
       const ptsInsideFC = turf.pointsWithinPolygon(grid, polygonGeoJSON);
-      const coords = ptsInsideFC.features.map(f => f.geometry.coordinates as [number, number]);
+      const coords = ptsInsideFC.features.map(
+        f => f.geometry.coordinates as [number, number],
+      );
 
       if (coords.length === 0) {
         const c = turf.centroid(polygonGeoJSON).geometry.coordinates as [number, number];
@@ -101,7 +103,7 @@ export class WeatherService {
         'precipitation',
         'surface_pressure',
         'windspeed_10m',
-        'winddirection_10m'
+        'winddirection_10m',
       ].join(',');
 
       const dailyParams = [
@@ -109,10 +111,11 @@ export class WeatherService {
         'temperature_2m_min',
         'precipitation_sum',
         'sunrise',
-        'sunset'
+        'sunset',
       ].join(',');
 
-      const urlRange = `${this.OPEN_METEO_BASE}?latitude=${lat}&longitude=${lon}` +
+      const urlRange =
+        `${this.OPEN_METEO_BASE}?latitude=${lat}&longitude=${lon}` +
         `&hourly=${hourlyParams}` +
         `&daily=${dailyParams}` +
         `&start_date=${startDate}&end_date=${endDate}` +
@@ -144,48 +147,92 @@ export class WeatherService {
         history30,
       };
     } catch (err) {
-      this.logger.error('fetchPointWeather error', err?.response?.data ?? err.message ?? err);
+      this.logger.error(
+        'fetchPointWeather error',
+        err?.response?.data ?? err.message ?? err,
+      );
       throw err;
     }
   }
 
-  private computeCurrentFromPayload(payload: any): any {
-    try {
-      const now = new Date();
-      const times: string[] = payload?.hourly?.time ?? [];
-      if (!times || times.length === 0) return null;
+private computeCurrentFromPayload(payload: any): any {
+  try {
+    const now = new Date();
+    const times: string[] = payload?.hourly?.time ?? [];
+    if (!times || times.length === 0) return null;
 
-      // find index of latest time <= now
-      let idx = times.length - 1;
-      for (let i = 0; i < times.length; i++) {
-        const t = new Date(times[i]);
-        if (t > now) {
-          idx = Math.max(0, i - 1);
-          break;
-        }
+    // find index of latest time <= now
+    let idx = times.length - 1;
+    for (let i = 0; i < times.length; i++) {
+      const t = new Date(times[i]);
+      if (t > now) {
+        idx = Math.max(0, i - 1);
+        break;
       }
-
-      const current: any = { time: times[idx] };
-      for (const key of Object.keys(payload.hourly)) {
-        if (key === 'time') continue;
-        const arr = payload.hourly[key];
-        current[key] = (Array.isArray(arr) && arr[idx] !== undefined) ? arr[idx] : null;
-      }
-      return current;
-    } catch (err) {
-      return null;
     }
+
+    const current: any = { time: times[idx] };
+
+    // copy current value for each hourly key
+    for (const key of Object.keys(payload.hourly)) {
+      if (key === "time") continue;
+      const arr = payload.hourly[key];
+      current[key] =
+        Array.isArray(arr) && arr[idx] !== undefined ? arr[idx] : null;
+    }
+
+    // 🔹 Friendly aliases for frontend
+
+    // Humidity: prefer correct Open-Meteo key, fall back to old one if present
+    const rh =
+      (typeof current.relative_humidity_2m === "number"
+        ? current.relative_humidity_2m
+        : undefined) ??
+      (typeof current.relativehumidity_2m === "number"
+        ? current.relativehumidity_2m
+        : undefined) ??
+      null;
+
+    if (rh !== null) {
+      current.humidity = rh;
+    }
+
+    // Rain: alias from precipitation
+    if (current.precipitation !== undefined && current.precipitation !== null) {
+      current.rain = current.precipitation;
+    }
+
+    return current;
+  } catch (err) {
+    return null;
   }
+}
+
 
   // get 7-day forward forecast
   private async fetch7DayForecast(lat: number, lon: number, timezone: string): Promise<any> {
     const start = formatISO(new Date(), { representation: 'date' });
     const end = formatISO(addDays(new Date(), 7), { representation: 'date' });
 
-    const dailyParams = ['temperature_2m_max', 'temperature_2m_min', 'precipitation_sum', 'sunrise', 'sunset'].join(',');
-    const hourlyParams = ['temperature_2m', 'relativehumidity_2m', 'precipitation', 'windspeed_10m', 'winddirection_10m'].join(',');
+    const dailyParams = [
+      'temperature_2m_max',
+      'temperature_2m_min',
+      'precipitation_sum',
+      'sunrise',
+      'sunset',
+    ].join(',');
+    const hourlyParams = [
+      'temperature_2m',
+      'relativehumidity_2m',
+      'apparent_temperature',
+      'precipitation',
+      'surface_pressure',
+      'windspeed_10m',
+      'winddirection_10m',
+    ].join(',');
 
-    const url = `${this.OPEN_METEO_BASE}?latitude=${lat}&longitude=${lon}` +
+    const url =
+      `${this.OPEN_METEO_BASE}?latitude=${lat}&longitude=${lon}` +
       `&daily=${dailyParams}&hourly=${hourlyParams}` +
       `&start_date=${start}&end_date=${end}&timezone=${encodeURIComponent(timezone)}`;
 
@@ -207,14 +254,32 @@ export class WeatherService {
         });
       }
     }
+
     for (const k of Array.from(numericKeys)) {
       let sum = 0;
       let count = 0;
       for (const r of results) {
         const v = r.data?.current?.[k];
-        if (typeof v === 'number') { sum += v; count += 1; }
+        if (typeof v === 'number') {
+          sum += v;
+          count += 1;
+        }
       }
-      aggregated.current[k] = count ? (sum / count) : null;
+      aggregated.current[k] = count ? sum / count : null;
+    }
+
+    // 🔹 Frontend-friendly aliases for aggregated current
+    if (
+      typeof aggregated.current['relativehumidity_2m'] === 'number' ||
+      aggregated.current['relativehumidity_2m'] === null
+    ) {
+      aggregated.current.humidity = aggregated.current['relativehumidity_2m'];
+    }
+    if (
+      typeof aggregated.current['precipitation'] === 'number' ||
+      aggregated.current['precipitation'] === null
+    ) {
+      aggregated.current.rain = aggregated.current['precipitation'];
     }
 
     // hourly aggregation if times match
@@ -231,13 +296,28 @@ export class WeatherService {
 
           for (const r of results) {
             const h = r.data?.hourly;
-            if (!h || !h[key] || h[key].length !== arrLength) { continue; }
+            if (!h || !h[key] || h[key].length !== arrLength) {
+              continue;
+            }
             for (let i = 0; i < arrLength; i++) {
               const val = h[key][i];
-              if (typeof val === 'number') { aggArr[i] += val; counts[i] += 1; }
+              if (typeof val === 'number') {
+                aggArr[i] += val;
+                counts[i] += 1;
+              }
             }
           }
-          aggregated.hourly[key] = aggArr.map((s, i) => counts[i] ? s / counts[i] : null);
+          aggregated.hourly[key] = aggArr.map((s, i) =>
+            counts[i] ? s / counts[i] : null,
+          );
+        }
+
+        // 🔹 Add hourly humidity/rain arrays for frontend
+        if (aggregated.hourly.relativehumidity_2m) {
+          aggregated.hourly.humidity = aggregated.hourly.relativehumidity_2m;
+        }
+        if (aggregated.hourly.precipitation) {
+          aggregated.hourly.rain = aggregated.hourly.precipitation;
         }
       }
     } catch (e) {
@@ -260,10 +340,15 @@ export class WeatherService {
             if (!d || !d[key] || d[key].length !== days) continue;
             for (let i = 0; i < days; i++) {
               const val = d[key][i];
-              if (typeof val === 'number') { arr[i] += val; counts[i] += 1; }
+              if (typeof val === 'number') {
+                arr[i] += val;
+                counts[i] += 1;
+              }
             }
           }
-          aggregated.daily7[key] = arr.map((s, i) => counts[i] ? s / counts[i] : null);
+          aggregated.daily7[key] = arr.map((s, i) =>
+            counts[i] ? s / counts[i] : null,
+          );
         }
       }
     } catch (e) {

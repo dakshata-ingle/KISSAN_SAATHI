@@ -29,10 +29,11 @@ type DailyRange = { date: string; min: number; max: number };
 type DailySeries = { dates?: string[]; values: number[] };
 
 type WeatherCurrent = {
-  temperature: number;
-  humidity: number;
-  windSpeed: number;
-  precipitation: number;
+  temperature: number | null;
+  humidity?: number | null;
+  rain?: number | null;
+  windSpeed: number | null;
+  precipitation: number | null;
   summary: string;
   lastUpdated?: string;
 };
@@ -64,10 +65,10 @@ function generateAdvice(data: WeatherAnalysisResponse | null): string {
   const total7Rain = data.forecast7d.precipitation.values.reduce((s, v) => s + v, 0);
   const avg7Humidity = data.forecast7d.humidity?.values.reduce((s, v) => s + v, 0) ?? 0;
 
-  if (cur.precipitation >= 6) {
+  if ((cur.precipitation ?? 0) >= 6) {
     return "Immediate Alert: Heavy rain expected. Protect seedlings and avoid fertilizer application for 24 hours.";
   }
-  if (cur.windSpeed >= 10) {
+  if ((cur.windSpeed ?? 0) >= 10) {
     return "Wind Alert: Strong winds detected. Secure lightweight materials and check greenhouse covers.";
   }
   if ((cur.temperature ?? 0) >= 38) {
@@ -79,7 +80,7 @@ function generateAdvice(data: WeatherAnalysisResponse | null): string {
   if (total7Rain >= 20) {
     return "Prediction: Significant rainfall expected this week — delay harvest and ensure drainage.";
   }
-  if (cur.humidity < 40 && cur.temperature > 30) {
+  if ((cur.humidity ?? 0) < 40 && (cur.temperature ?? 0) > 30) {
     return "Tip: Soil moisture is low and it's warm. Consider topping up irrigation to avoid stress.";
   }
   if (avg7Humidity && avg7Humidity / Math.max(1, avg7.length) < 45) {
@@ -283,12 +284,18 @@ export default function WeatherPage() {
           <span className="text-xs text-gray-500">Realtime</span>
           <button
             onClick={() => setRealtime((r) => !r)}
-            className={`px-3 py-1 rounded-full text-xs font-semibold transform transition ${realtime ? "bg-emerald-600 text-white shadow-lg" : "bg-gray-200 text-gray-700 hover:scale-105"}`}
+            className={`px-3 py-1 rounded-full text-xs font-semibold transform transition ${
+              realtime ? "bg-emerald-600 text-white shadow-lg" : "bg-gray-200 text-gray-700 hover:scale-105"
+            }`}
           >
             {realtime ? "ON" : "OFF"}
           </button>
 
-          <button onClick={fetchWeather} disabled={loading} className="px-4 py-2 bg-amber-600 text-white rounded-full shadow hover:scale-105 transition">
+          <button
+            onClick={fetchWeather}
+            disabled={loading}
+            className="px-4 py-2 bg-amber-600 text-white rounded-full shadow hover:scale-105 transition"
+          >
             {loading ? "Loading..." : "Refresh"}
           </button>
         </div>
@@ -299,8 +306,11 @@ export default function WeatherPage() {
       {/* Current + Mithu */}
       <section className="bg-white rounded-2xl shadow p-6 mb-6 group hover:shadow-2xl transform-gpu hover:scale-[1.007] transition-all">
         <div className="flex gap-6 items-center">
-          <div className="w-36 h-36 rounded-xl flex flex-col items-center justify-center text-white" style={{ background: "linear-gradient(90deg,#16a34a,#059669)" }}>
-            <div className="text-4xl font-bold">{data ? Math.round(data.current.temperature) : "--"}°C</div>
+          <div
+            className="w-36 h-36 rounded-xl flex flex-col items-center justify-center text-white"
+            style={{ background: "linear-gradient(90deg,#16a34a,#059669)" }}
+          >
+            <div className="text-4xl font-bold">{data && data.current.temperature != null ? Math.round(data.current.temperature) : "--"}°C</div>
             <div className="text-sm opacity-90">{data?.current?.summary ?? "—"}</div>
           </div>
 
@@ -314,7 +324,9 @@ export default function WeatherPage() {
                   <div className="flex items-center gap-3">
                     <div>
                       <div className="text-xs text-gray-600">Humidity</div>
-                      <div className="font-semibold">{data ? `${data.current.humidity}%` : "--"}</div>
+                      <div className="font-semibold">
+                        {data?.current?.humidity != null ? `${Math.round(data.current.humidity)}%` : "--"}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -323,7 +335,9 @@ export default function WeatherPage() {
                   <div className="flex items-center gap-3">
                     <div>
                       <div className="text-xs text-gray-600">Wind</div>
-                      <div className="font-semibold">{data ? `${data.current.windSpeed} m/s` : "--"}</div>
+                      <div className="font-semibold">
+                        {data?.current?.windSpeed != null ? `${data.current.windSpeed.toFixed(1)} m/s` : "--"}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -332,7 +346,9 @@ export default function WeatherPage() {
                   <div className="flex items-center gap-3">
                     <div>
                       <div className="text-xs text-gray-600">Precipitation</div>
-                      <div className="font-semibold">{data ? `${data.current.precipitation} mm` : "--"}</div>
+                      <div className="font-semibold">
+                        {data?.current?.precipitation != null ? `${data.current.precipitation.toFixed(1)} mm` : "--"}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -347,7 +363,10 @@ export default function WeatherPage() {
                 </div>
               </div>
 
-              <div className="text-xs text-gray-400 mt-3">Last updated: {data?.current?.lastUpdated ? new Date(data.current.lastUpdated).toLocaleString() : "—"}</div>
+              <div className="text-xs text-gray-400 mt-3">
+                Last updated:{" "}
+                {data?.current?.lastUpdated ? new Date(data.current.lastUpdated).toLocaleString() : "—"}
+              </div>
             </div>
 
             {/* Mithu on the right */}
@@ -392,7 +411,11 @@ export default function WeatherPage() {
                   <td className="p-2 text-center">{d.min}</td>
                   <td className="p-2 text-center">{d.max}</td>
                   <td className="p-2 text-center">{data.forecast7d.precipitation.values[i]}</td>
-                  <td className="p-2 text-center">{data.forecast7d.humidity?.values?.[i] ?? "—"}</td>
+                  <td className="p-2 text-center">
+                    {data.forecast7d.humidity?.values?.[i] != null
+                      ? data.forecast7d.humidity.values[i]
+                      : "—"}
+                  </td>
                 </tr>
               ))}
             </tbody>
