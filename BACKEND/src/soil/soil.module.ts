@@ -6,8 +6,12 @@ import { SoilService } from './soil.service';
 import { GeocodingModule } from '../geocoding/geocoding.module';
 
 @Module({
-  imports: [HttpModule, GeocodingModule],
+  imports: [
+    HttpModule,        // required for Open-Meteo soil API calls
+    GeocodingModule,   // required because SoilService injects GeocodingService
+  ],
   controllers: [SoilController],
   providers: [SoilService],
+  exports: [SoilService],
 })
 export class SoilModule {}
