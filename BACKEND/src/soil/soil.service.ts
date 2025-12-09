@@ -15,6 +15,21 @@ import {
   MapLayersDto,
 } from './dto/soil-health-response.dto';
 
+// quick conversion defaults used to estimate numeric values from percentOfOptimal
+const NUTRIENT_OPTIMAL_VALUES: Record<string, number> = {
+  // units: N,P,K -> kg/ha; micronutrients -> ppm
+  N: 280,
+  P: 15,
+  K: 250,
+  ZN: 1,
+  FE: 5,
+  MN: 3,
+  CU: 1,
+  B: 0.5,
+  S: 10,
+  OC: 0.8, // % SOC (example)
+};
+
 // ---- Internal helper types (service ke andar hi use honge) ----
 type NutrientLevel = 'low' | 'medium' | 'high';
 
@@ -153,6 +168,22 @@ export class SoilService {
       vraGeoJson: null,
     };
 
+    // ---------- NEW: simple crop guess and indices placeholder ----------
+    const now = new Date();
+    const month = now.getUTCMonth() + 1; // 1-12
+    const cropGuess = month >= 6 && month <= 10 ? 'RICE' : 'WHEAT';
+
+    const indices = {
+      ndvi: null,
+      ndre: null,
+      evi: null,
+      ndwi: null,
+      savi: null,
+      vari: null,
+      soilOrganicCarbon: null,
+      landSurfaceTemp: null,
+    };
+
     const response: SoilHealthResponseDto = {
       location: {
         name: resolvedName,
@@ -164,6 +195,10 @@ export class SoilService {
       actionPlan,
       mapLayers,
       updatedAt: new Date().toISOString(),
+
+      // added fields
+      crop: cropGuess,
+      indices,
     };
 
     return response;
@@ -320,12 +355,27 @@ export class SoilService {
       if (level === 'medium') return 'MONITOR';
       return 'GOOD';
     };
+    
+    // helper: convert percentOfOptimal -> numeric value using defaults above
+    const approxValueFromPct = (code: string | undefined, pct: number | null) => {
+      if (pct == null) return null;
+      const base = NUTRIENT_OPTIMAL_VALUES[code ?? ""] ?? null;
+      if (base == null) return Math.round(pct); // fallback: return percent itself
+      // for example, pct 70 => 0.7 * base
+      // use rounding for nicer numbers
+      if (code === 'OC') {
+        // SOC stored as percent; percentOfOptimal is 0-100 -> we convert to percent
+        // assume base is % value
+        return Number(((pct / 100) * base).toFixed(2));
+      }
+      return Math.round((pct / 100) * base);
+    };
 
     return [
       {
         code: 'N',
         name: 'Nitrogen',
-        value: null,
+        value: approxValueFromPct('N', overview.nitrogen.high),
         unit: 'kg/ha',
         percentOfOptimal: overview.nitrogen.high,
         status: mapLevelToStatus(overview.nitrogen.currentLevel),
@@ -333,7 +383,7 @@ export class SoilService {
       {
         code: 'P',
         name: 'Phosphorus',
-        value: null,
+        value: approxValueFromPct('P', overview.phosphorus.high),
         unit: 'kg/ha',
         percentOfOptimal: overview.phosphorus.high,
         status: mapLevelToStatus(overview.phosphorus.currentLevel),
@@ -341,7 +391,7 @@ export class SoilService {
       {
         code: 'K',
         name: 'Potassium',
-        value: null,
+        value: approxValueFromPct('K', overview.potassium.high),
         unit: 'kg/ha',
         percentOfOptimal: overview.potassium.high,
         status: mapLevelToStatus(overview.potassium.currentLevel),
@@ -349,7 +399,7 @@ export class SoilService {
       {
         code: 'ZN',
         name: 'Zinc',
-        value: null,
+        value: approxValueFromPct('ZN', overview.zinc.high),
         unit: 'ppm',
         percentOfOptimal: overview.zinc.high,
         status: mapLevelToStatus(overview.zinc.currentLevel),

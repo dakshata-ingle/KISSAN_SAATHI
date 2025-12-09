@@ -1,0 +1,497 @@
+/* app/soil/soil-health.css */
+/* Kisaan Saathi – Soil Health Card segment styles */
+
+:root {
+  --ks-prosperity-green: #008037;
+  --ks-sky-blue: #0077b6;
+  --ks-field-white: #ffffff;
+  --ks-soil-black: #333333;
+  --ks-light-grey: #f4f4f4;
+  --ks-harvest-gold: #ffc300;
+  --ks-risk-red: #c41e3a;
+  --ks-earth-brown: #795548;
+  --ks-saturation-blue: #4f84c4;
+}
+
+/* Root card */
+.ks-soil-card-root {
+  background-color: var(--ks-field-white);
+  padding: 16px;
+  border-radius: 18px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+  max-width: 1100px;
+  margin: 0 auto 24px auto;
+}
+
+/* Header + context line */
+.ks-soil-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.ks-soil-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--ks-soil-black);
+}
+.ks-soil-context {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ks-sky-blue);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Mithu Co-Pilot panel */
+
+.ks-mithu-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0 14px 0;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid #d1fae5;
+  background: linear-gradient(
+    90deg,
+    rgba(16, 185, 129, 0.12),
+    rgba(22, 163, 74, 0.04)
+  );
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+.ks-mithu-panel:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 25px rgba(5, 46, 22, 0.12);
+}
+.ks-mithu-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #ecfdf5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ks-mithu-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.ks-mithu-meta {
+  flex: 1;
+}
+.ks-mithu-headline {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #065f46;
+}
+.ks-mithu-subline {
+  font-size: 0.8rem;
+  color: #047857;
+}
+.ks-mithu-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ks-mithu-tag {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background-color: #ecfdf5;
+  color: #064e3b;
+}
+
+/* Forecast slider */
+.ks-forecast-section-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.ks-forecast-slider {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  -webkit-overflow-scrolling: touch;
+}
+.ks-forecast-card {
+  flex: 0 0 80px;
+  padding: 6px 6px 8px 6px;
+  border-radius: 12px;
+  background-color: var(--ks-light-grey);
+  border: 1px solid #e5e7eb;
+  text-align: center;
+  font-size: 0.75rem;
+  cursor: default;
+  transition: transform 0.15s ease, box-shadow 0.15s ease,
+    border-color 0.15s ease;
+}
+.ks-forecast-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(15, 118, 110, 0.15);
+  border-color: #a7f3d0;
+}
+.ks-forecast-card-day {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.ks-forecast-card-temp {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.ks-forecast-card-status {
+  font-size: 0.7rem;
+}
+
+.ks-forecast-card.status-Optimal {
+  border-bottom: 3px solid var(--ks-prosperity-green);
+}
+.ks-forecast-card.status-Monitor {
+  border-bottom: 3px solid var(--ks-harvest-gold);
+}
+.ks-forecast-card.status-Critical {
+  border-bottom: 3px solid var(--ks-risk-red);
+}
+
+/* Thermogram */
+.ks-thermo-section-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 12px 0 4px 0;
+}
+.ks-thermo-layout {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 8px 0 4px 0;
+}
+.ks-thermo-cylinder-wrap {
+  flex: 0 0 260px;
+  display: flex;
+  justify-content: center;
+}
+.ks-thermo-cylinder {
+  width: 100%;
+  max-width: 260px;
+  height: 320px;
+  border-radius: 50% / 6%;
+  overflow: hidden;
+  position: relative;
+  border: 3px solid var(--ks-earth-brown);
+  background-color: var(--ks-earth-brown);
+}
+.ks-thermo-grass-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 10px;
+  background: linear-gradient(
+    to top,
+    var(--ks-prosperity-green),
+    #4caf50
+  );
+  border-radius: 50% / 10px;
+  z-index: 10;
+}
+.ks-thermo-layer {
+  height: 25%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  color: var(--ks-field-white);
+  font-weight: 600;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.6);
+}
+.ks-thermo-depth {
+  font-size: 0.8rem;
+}
+.ks-thermo-data-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+.ks-thermo-temp {
+  font-size: 0.78rem;
+}
+.ks-thermo-moisture {
+  font-size: 0.78rem;
+}
+
+/* Digital Soil Health Card (table) */
+
+.ks-healthcard {
+  flex: 1;
+  min-width: 260px;
+  background-color: #f9fafb;
+  border-radius: 14px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+}
+.ks-healthcard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 0.8rem;
+}
+.ks-healthcard-title {
+  font-weight: 700;
+  color: #065f46;
+}
+.ks-healthcard-meta {
+  color: #6b7280;
+  font-size: 0.75rem;
+}
+.ks-healthcard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+.ks-healthcard-table th,
+.ks-healthcard-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid #e5e7eb;
+}
+.ks-healthcard-table th {
+  text-align: left;
+  color: #6b7280;
+}
+.ks-healthcard-row:hover {
+  background-color: #edf2ff;
+}
+
+/* Nutrient gauges (simplified cards) */
+
+.ks-nutrient-section-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-top: 14px;
+  margin-bottom: 6px;
+}
+.ks-nutrient-gauges {
+  padding-top: 4px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+.ks-nutrient-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+  transition: transform 0.15s ease, box-shadow 0.15s ease,
+    border-color 0.15s ease;
+}
+.ks-nutrient-item:hover {
+  transform: translateY(-1px);
+  border-color: #bbf7d0;
+  box-shadow: 0 8px 18px rgba(16, 185, 129, 0.16);
+}
+.ks-nutrient-label {
+  width: 32px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+.ks-nutrient-bar-wrap {
+  flex: 1;
+  height: 8px;
+  background-color: #e5e7eb;
+  border-radius: 999px;
+  margin: 0 8px;
+  overflow: hidden;
+}
+.ks-nutrient-bar {
+  height: 100%;
+  transition: width 0.4s ease;
+}
+.ks-nutrient-status {
+  width: 70px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: right;
+}
+
+/* Vegetation index grid */
+
+.ks-index-section-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-top: 14px;
+  margin-bottom: 6px;
+}
+.ks-index-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+.ks-index-card {
+  background-color: #f9fafb;
+  border-radius: 14px;
+  padding: 10px 10px 8px 10px;
+  border: 1px solid #e5e7eb;
+  transition: transform 0.15s ease, box-shadow 0.15s ease,
+    border-color 0.15s ease;
+  cursor: default;
+}
+.ks-index-card:hover {
+  transform: translateY(-2px);
+  border-color: #bfdbfe;
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.18);
+}
+.ks-index-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.ks-index-name {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.ks-index-purpose {
+  font-size: 0.7rem;
+  color: #6b7280;
+}
+.ks-index-value {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.ks-index-status-pill {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background-color: #e5e7eb;
+}
+.ks-index-hint {
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: #4b5563;
+}
+
+/* Treatment plan */
+
+.ks-treatment-toggle {
+  margin-top: 14px;
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background-color: var(--ks-sky-blue);
+  color: #ffffff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.ks-treatment-note {
+  padding: 0 4px;
+  font-size: 0.82rem;
+  margin-top: 6px;
+}
+.ks-treatment-steps {
+  margin-top: 8px;
+}
+.ks-treatment-card {
+  display: flex;
+  padding: 10px;
+  border-radius: 12px;
+  background-color: var(--ks-light-grey);
+  border-left: 4px solid var(--ks-risk-red);
+  margin-bottom: 8px;
+}
+.ks-treatment-icon {
+  font-size: 1.6rem;
+  margin-right: 10px;
+}
+.ks-treatment-body-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.ks-treatment-body-detail {
+  font-size: 0.8rem;
+  color: #4b5563;
+  margin-top: 2px;
+}
+.ks-treatment-body-target {
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
+.ks-treatment-chip {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 999px;
+  margin-bottom: 4px;
+  color: #ffffff;
+  background-color: var(--ks-risk-red);
+}
+.ks-treatment-button {
+  margin-top: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: none;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background-color: var(--ks-risk-red);
+  color: #ffffff;
+  cursor: pointer;
+}
+
+/* Responsive tweaks */
+@media (max-width: 768px) {
+  .ks-soil-card-root {
+    padding: 12px;
+    border-radius: 16px;
+  }
+  .ks-thermo-layout {
+    gap: 12px;
+  }
+}
+
+/* Position badges to the right of the image (responsive and stable) */
+.soil-image-wrap {
+  position: relative;
+}
+
+/* badges are absolutely positioned relative to the image container */
+.soil-badge {
+  position: absolute;
+  left: calc(100% + 12px); /* places badge to the right of the image with 12px gap */
+  z-index: 30;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  transform: translateY(-50%); /* vertically center the badge on its top% */
+}
+
+/* if you want the little dot on the left of each badge to sit nicely: */
+/**.soil-badge > div {
+  align-items: center;
+}
+*/
+/* small responsive fallback: on narrow screens place badges under the image */
+@media (max-width: 640px) {
+  .soil-badge {
+    position: static;
+    transform: none;
+    margin-top: 8px;
+    left: auto;
+  }
+  .soil-image-wrap {
+    margin-bottom: 10px;
+  }
+}

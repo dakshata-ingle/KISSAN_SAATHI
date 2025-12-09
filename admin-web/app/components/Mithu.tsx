@@ -10,23 +10,36 @@ export default function Mithu({
   mood = "default",
   loop = true,
   onClick,
+  onSpeak,
   advice,
   showAdvice = false,
   glide = false,
   size = 144,
+  transcript,
+  listening: listeningProp,
+  imageSrc = "/images/mithu.jpg", // default path: put your image in public/mithu.jpg
 }: {
   mood?: MithuMood;
   loop?: boolean;
   onClick?: () => void;
+  onSpeak?: (start: boolean) => void;
   advice?: string | null;
   showAdvice?: boolean;
   glide?: boolean;
   size?: number;
+  transcript?: string | null;
+  listening?: boolean | undefined;
+  imageSrc?: string;
 }) {
   const [blink, setBlink] = useState(false);
   const [flap, setFlap] = useState(false);
   const [expr, setExpr] = useState<MithuExpression>("idle");
+  const [listening, setListening] = useState<boolean>(!!listeningProp);
   const flapTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (typeof listeningProp === "boolean") setListening(listeningProp);
+  }, [listeningProp]);
 
   useEffect(() => {
     if (!loop) return;
@@ -44,6 +57,7 @@ export default function Mithu({
   }, []);
 
   function handleClick() {
+    // little flap + expression sequence
     setFlap(true);
     if (flapTimer.current) window.clearTimeout(flapTimer.current);
     flapTimer.current = window.setTimeout(() => setFlap(false), 480);
@@ -55,127 +69,139 @@ export default function Mithu({
     if (onClick) onClick();
   }
 
+  function toggleListening(e?: React.MouseEvent | React.KeyboardEvent) {
+    if (e && "stopPropagation" in e) e.stopPropagation();
+    const next = !listening;
+    setListening(next);
+    if (onSpeak) onSpeak(next);
+    setExpr(next ? "alert" : "happy");
+    if (!next) setTimeout(() => setExpr("idle"), 700);
+  }
+
+  function onMicKey(e: React.KeyboardEvent) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      toggleListening(e);
+    }
+  }
+
   const glideClass = glide ? "mithu-glide" : "";
-
-  const moodOverlay: Record<MithuMood, React.ReactNode> = {
-    sunny: (
-      <g transform={`translate(${size * 0.65}, ${size * 0.14})`} className="overlay-sunglasses">
-        <rect x="-18" y="-4" width="36" height="12" rx="3" fill="#0f172a" />
-        <rect x="0" y="-4" width="10" height="4" rx="1.5" fill="#0f172a" />
-      </g>
-    ),
-    rainy: (
-      <g transform={`translate(${size * 0.52}, ${size * 0.05})`} className="overlay-umbrella">
-        <path d="M0 8 C8 -6 56 -6 64 8 Z" fill="#2563eb" stroke="#1e40af" strokeWidth="1" />
-        <rect x={size * 0.33} y={size * 0.18} width="2" height="16" rx="1" fill="#6b7280" />
-      </g>
-    ),
-    windy: (
-      <g transform={`translate(${size * 0.06}, ${size * 0.12})`} className="overlay-wind" opacity="0.95">
-        <path d="M4 22 C20 18 36 22 52 18" stroke="#7dd3fc" strokeWidth="3" fill="none" strokeLinecap="round" />
-        <path d="M2 30 C16 26 32 30 44 26" stroke="#67e8f9" strokeWidth="2" fill="none" strokeLinecap="round" />
-      </g>
-    ),
-    hot: (
-      <g transform={`translate(${size * 0.7}, ${size * 0.05})`} className="overlay-heat">
-        <circle cx="0" cy="0" r="8" fill="#fecaca" opacity="0.9" />
-        <path d="M-2 -6 C2 -2 6 -2 8 2" stroke="#fb923c" strokeWidth="2" fill="none" strokeLinecap="round" />
-      </g>
-    ),
-    cloudy: (
-      <g transform={`translate(${size * 0.6}, ${size * 0.08})`} className="overlay-cloud">
-        <ellipse cx="0" cy="8" rx="12" ry="8" fill="#cbd5e1" />
-        <ellipse cx="16" cy="2" rx="8" ry="6" fill="#cbd5e1" />
-      </g>
-    ),
-    default: null,
-  };
-
   const W = size;
   const H = size;
 
   return (
-    <div className={`mithu-root relative inline-block ${glideClass}`} style={{ width: W, height: H }} onClick={handleClick}>
-      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="block" role="img" aria-label="Mithu animated bird">
-        <defs>
-          <linearGradient id="mithu-body" x1="0" x2="1">
-            <stop offset="0%" stopColor="#ffffff" />
-            <stop offset="100%" stopColor="#fff7ed" />
-          </linearGradient>
-          <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
-            <feDropShadow dx="0" dy="4" stdDeviation="6" floodColor="#000" floodOpacity="0.08" />
-          </filter>
-        </defs>
+    <div
+      className={`mithu-root relative inline-block ${glideClass} group`}
+      style={{ width: W, height: H, cursor: "pointer" }}
+      onClick={handleClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          handleClick();
+        }
+      }}
+      aria-label="Mithu AI copilot — click to interact"
+    >
+      {/* Image container */}
+      <div
+        className={`mithu-image-wrap ${flap ? "flap" : ""} ${expr === "surprised" ? "surprise" : ""}`}
+        style={{
+          width: W,
+          height: H,
+          borderRadius: Math.min(16, W * 0.12),
+          overflow: "visible",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          position: "relative",
+        }}
+      >
+        {/* the parrot image */}
+        <img
+          src={imageSrc}
+          alt="Mithu parrot copilot"
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: "block",
+            transformOrigin: "50% 40%",
+            transition: "transform 220ms ease",
+            boxShadow: "0 8px 22px rgba(2,6,23,0.08)",
+            borderRadius: "12px",
+          }}
+          draggable={false}
+        />
 
-        <ellipse cx={W / 2} cy={H * 0.84} rx={W * 0.22} ry={H * 0.06} fill="#000" opacity={0.06} />
-
-        <g transform={`translate(${W * 0.18}, ${H * 0.12})`}>
-          <g filter="url(#shadow)">
-            <ellipse cx={W * 0.32} cy={H * 0.36} rx={W * 0.25} ry={H * 0.33} fill="url(#mithu-body)" stroke="#f3e6d8" strokeWidth="1.2" />
-          </g>
-
-          <g transform={`translate(${W * 0.24}, ${H * 0.44})`} className={`beak-group ${expr === "surprised" ? "beak-surprise" : ""}`}>
-            <path d={`M${W * 0.12} ${H * 0.02} C ${W * 0.18} ${H * 0.05} ${W * 0.22} ${H * 0.10} ${W * 0.18} ${H * 0.12} C ${W * 0.12} ${H * 0.14} ${W * 0.06} ${H * 0.12} ${W * 0.04} ${H * 0.10} C ${W * 0.06} ${H * 0.08} ${W * 0.10} ${H * 0.04} ${W * 0.12} ${H * 0.02} Z`} fill="#f59e0b" />
-          </g>
-
-          <g transform={`translate(${W * 0.16}, ${H * 0.26})`}>
-            <g transform={`translate(0, 0)`}>
-              {blink ? (
-                <rect x={W * 0.01} y={H * 0.04} width={W * 0.06} height={H * 0.015} rx={W * 0.004} fill="#0f172a" />
-              ) : expr === "happy" ? (
-                <path d={`M0 ${H * 0.04} q ${W * 0.03} ${H * 0.03} ${W * 0.06} 0`} stroke="#0f172a" strokeWidth={1.6} strokeLinecap="round" fill="none" />
-              ) : expr === "thinking" ? (
-                <circle cx={W * 0.03} cy={H * 0.03} r={W * 0.015} fill="#0f172a" />
-              ) : expr === "alert" ? (
-                <circle cx={W * 0.03} cy={H * 0.03} r={W * 0.02} fill="#0f172a" />
-              ) : (
-                <circle cx={W * 0.03} cy={H * 0.03} r={W * 0.017} fill="#0f172a" />
-              )}
-            </g>
-
-            <g transform={`translate(${W * 0.09}, 0)`}>
-              {blink ? (
-                <rect x={W * 0.01} y={H * 0.04} width={W * 0.06} height={H * 0.015} rx={W * 0.004} fill="#0f172a" />
-              ) : expr === "happy" ? (
-                <path d={`M0 ${H * 0.04} q ${W * 0.03} ${H * 0.03} ${W * 0.06} 0`} stroke="#0f172a" strokeWidth={1.6} strokeLinecap="round" fill="none" />
-              ) : expr === "thinking" ? (
-                <circle cx={W * 0.03} cy={H * 0.03} r={W * 0.015} fill="#0f172a" />
-              ) : expr === "alert" ? (
-                <circle cx={W * 0.03} cy={H * 0.03} r={W * 0.02} fill="#0f172a" />
-              ) : (
-                <circle cx={W * 0.03} cy={H * 0.03} r={W * 0.017} fill="#0f172a" />
-              )}
-            </g>
-          </g>
-
-          <g transform={`translate(${W * 0.02}, ${H * -0.02})`} className={`feathers ${flap ? "fe-flap" : ""}`}>
-            <path className="f1" d={`M${W * 0.12} ${H * 0.42} C ${W * 0.08} ${H * 0.22} ${W * 0.20} ${H * 0.16} ${W * 0.28} ${H * 0.22}`} stroke="#f97316" strokeWidth={2} strokeLinecap="round" fill="none" />
-            <path className="f2" d={`M${W * 0.06} ${H * 0.48} C ${W * 0.10} ${H * 0.30} ${W * 0.22} ${H * 0.20} ${W * 0.30} ${H * 0.26}`} stroke="#fb923c" strokeWidth={1.6} strokeLinecap="round" fill="none" />
-            <path className="f3" d={`M${W * 0.02} ${H * 0.54} C ${W * 0.10} ${H * 0.36} ${W * 0.20} ${H * 0.28} ${W * 0.26} ${H * 0.32}`} stroke="#f59e0b" strokeWidth={1.4} strokeLinecap="round" fill="none" />
-          </g>
-
-          <g transform={`translate(${W * 0.26}, ${H * 0.32})`} className={`wing ${flap ? "wing-flap" : ""}`}>
-            <path d={`M${W * 0.06} ${H * 0.36} C ${W * 0.28} ${H * 0.30} ${W * 0.34} ${H * 0.42} ${W * 0.24} ${H * 0.46}`} fill="#fff7f0" stroke="#f3d7b4" strokeWidth={0.8} />
-          </g>
-
-          <g transform={`translate(${W * 0.06}, ${H * 0.02})`} className="hat">
-            <ellipse cx={W * 0.36} cy={H * -0.02} rx={W * 0.12} ry={H * 0.06} fill="#b9844a" />
-            <rect x={W * 0.22} y={H * -0.02} width={W * 0.28} height={H * 0.06} rx={W * 0.02} fill="#8b5a2b" />
-          </g>
-
-          {moodOverlay[mood]}
-        </g>
-      </svg>
-
-      {showAdvice && advice ? (
+        {/* subtle crest blink / eye indicator (simple circle that fades when blink true) */}
         <div
-          className="absolute left-full top-1/4 ml-3 w-64"
+          aria-hidden
+          className="mithu-eye"
+          style={{
+            position: "absolute",
+            left: `${W * 0.58}px`,
+            top: `${H * 0.28}px`,
+            width: Math.max(6, W * 0.06),
+            height: Math.max(6, W * 0.06),
+            borderRadius: "999px",
+            background: "#0f172a",
+            opacity: blink ? 0.05 : 1,
+            transition: "opacity 120ms linear, transform 220ms ease",
+            transform: blink ? "scaleY(0.2)" : "scaleY(1)",
+            pointerEvents: "none",
+          }}
+        />
+      </div>
+
+      {/* microphone / copilot control */}
+      <div
+        className="absolute -bottom-3 left-1/2 transform -translate-x-1/2 flex items-center gap-2"
+        style={{ width: Math.max(92, W * 0.8), justifyContent: "center", pointerEvents: "auto" }}
+      >
+        <div
+          role="button"
+          tabIndex={0}
+          aria-pressed={listening}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleListening(e);
+          }}
+          onKeyDown={onMicKey}
+          title={listening ? "Stop listening" : "Start listening"}
+          className={`mithu-mic inline-flex items-center justify-center p-2 rounded-full shadow cursor-pointer select-none ${
+            listening ? "listening" : "not-listening"
+          }`}
+          style={{
+            background: listening ? "linear-gradient(180deg,#ef4444,#dc2626)" : "white",
+            border: "1px solid rgba(15,23,42,0.06)",
+            boxShadow: "0 6px 18px rgba(2,6,23,0.06)",
+            width: 40,
+            height: 40,
+          }}
+        >
+          {/* mic icon */}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+            <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3z" stroke={listening ? "#fff" : "#0f172a"} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M19 11v1a7 7 0 0 1-14 0v-1" stroke={listening ? "#fff" : "#0f172a"} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M12 21v-3" stroke={listening ? "#fff" : "#0f172a"} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+
+        <div style={{ fontSize: 12, color: "#0f172a", opacity: 0.85 }}>{listening ? "Listening..." : "Tap to talk"}</div>
+      </div>
+
+      {/* speech / advice bubble */}
+      {(showAdvice && advice) || transcript ? (
+        <div
+          className="absolute left-full top-1/3 ml-3 w-64"
           role="status"
           aria-live="polite"
-          style={{ transform: "translateY(-8%)" }}
+          style={{ transform: "translateY(-8%)", pointerEvents: "auto" }}
         >
           <div className="bg-white p-3 rounded-2xl shadow border" style={{ fontSize: 14 }}>
-            <div style={{ color: "#0f172a", lineHeight: 1.25 }}>{advice}</div>
+            <div style={{ color: "#0f172a", lineHeight: 1.25, minHeight: 22 }}>{transcript ?? advice}</div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
               <button
                 className="px-2 py-1 rounded bg-emerald-600 text-white text-xs"
@@ -201,40 +227,58 @@ export default function Mithu({
       ) : null}
 
       <style jsx>{`
-        .mithu-root { user-select: none; }
-        .feathers .f1 { transform-origin: 8px 8px; animation: sway 2.8s ease-in-out infinite; }
-        .feathers .f2 { transform-origin: 8px 8px; animation: sway2 2.4s ease-in-out infinite; }
-        .feathers .f3 { transform-origin: 8px 8px; animation: sway3 2s ease-in-out infinite; }
+        .mithu-root {
+          user-select: none;
+          -webkit-tap-highlight-color: transparent;
+        }
 
-        .fe-flap .f1 { animation: flap1 0.42s ease-in-out 1; }
-        .fe-flap .f2 { animation: flap2 0.42s ease-in-out 1; }
-        .fe-flap .f3 { animation: flap3 0.42s ease-in-out 1; }
+        /* small transform on image when flap/expr changes to give life */
+        .mithu-image-wrap.flap img {
+          transform: translateY(-4px) rotate(-3deg) scale(1.02);
+        }
+        .mithu-image-wrap.surprise img {
+          transform: translateY(-2px) scale(1.03);
+        }
 
-        .wing { transform-origin: 20% 50%; transition: transform 220ms ease; }
-        .wing-flap { transform: rotate(-12deg) translateY(-2px) scale(1.02); }
+        .mithu-glide {
+          animation: glideX 0.9s cubic-bezier(.2, .9, .2, 1) forwards;
+        }
+        @keyframes glideX {
+          0% {
+            transform: translateX(0) scale(1);
+          }
+          60% {
+            transform: translateX(120px) scale(1.02);
+          }
+          100% {
+            transform: translateX(180px) scale(0.96);
+          }
+        }
 
-        .beak-group { transform-origin: center; transition: transform 220ms ease; }
-        .beak-surprise { transform: rotate(6deg) translateY(-1px) scale(1.02); }
+        /* mic listening pulse */
+        .mithu-mic.listening {
+          animation: micPulse 1s infinite;
+        }
+        @keyframes micPulse {
+          0% {
+            transform: scale(1);
+            box-shadow: 0 6px 18px rgba(220, 38, 38, 0.15);
+          }
+          50% {
+            transform: scale(1.06);
+            box-shadow: 0 10px 28px rgba(220, 38, 38, 0.22);
+          }
+          100% {
+            transform: scale(1);
+            box-shadow: 0 6px 18px rgba(220, 38, 38, 0.15);
+          }
+        }
 
-        @keyframes sway { 0% { transform: rotate(0deg) } 50% { transform: rotate(-6deg) } 100% { transform: rotate(0deg) } }
-        @keyframes sway2 { 0% { transform: rotate(0deg) } 50% { transform: rotate(-4deg) } 100% { transform: rotate(0deg) } }
-        @keyframes sway3 { 0% { transform: rotate(0deg) } 50% { transform: rotate(-3deg) } 100% { transform: rotate(0deg) } }
-
-        @keyframes flap1 { 0% { transform: rotate(0) } 50% { transform: rotate(-18deg) scale(1.05) } 100% { transform: rotate(0) } }
-        @keyframes flap2 { 0% { transform: rotate(0) } 50% { transform: rotate(-14deg) scale(1.03) } 100% { transform: rotate(0) } }
-        @keyframes flap3 { 0% { transform: rotate(0) } 50% { transform: rotate(-10deg) scale(1.02) } 100% { transform: rotate(0) } }
-
-        .mithu-glide { animation: glideX 0.9s cubic-bezier(.2,.9,.2,1) forwards; }
-        @keyframes glideX { 0% { transform: translateX(0) scale(1) } 60% { transform: translateX(120px) scale(1.02) } 100% { transform: translateX(180px) scale(0.96) } }
-
-        .overlay-umbrella { animation: umbrella 2.2s ease-in-out infinite; transform-origin: center; }
-        @keyframes umbrella { 0% { transform: translateY(0) rotate(-3deg)} 50% { transform: translateY(0) rotate(3deg)} 100% { transform: translateY(0) rotate(-3deg)} }
-
-        .overlay-wind { animation: windShift 1.6s linear infinite; }
-        @keyframes windShift { 0% { transform: translateX(0) } 50% { transform: translateX(6px) } 100% { transform: translateX(0) } }
-
-        .overlay-heat { animation: heatPulse 3.6s ease-in-out infinite; }
-        @keyframes heatPulse { 0% { transform: scale(1) } 50% { transform: scale(1.02) } 100% { transform: scale(1) } }
+        .group:focus,
+        .group:focus-within {
+          outline: 2px solid rgba(59, 130, 246, 0.12);
+          border-radius: 8px;
+        }
       `}</style>
     </div>
   );

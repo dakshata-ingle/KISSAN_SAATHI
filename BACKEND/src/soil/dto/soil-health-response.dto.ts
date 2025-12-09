@@ -58,6 +58,16 @@ export class MapLayersDto {
   vraGeoJson?: any;        // future
 }
 
+export class SoilIndicesDto {
+  ndvi?: number | null;
+  ndre?: number | null;
+  evi?: number | null;
+  ndwi?: number | null;
+  savi?: number | null;
+  vari?: number | null;
+  soilOrganicCarbon?: number | null; // %
+  landSurfaceTemp?: number | null; // °C
+}
 
 export class SoilHealthResponseDto {
   location: {
@@ -70,4 +80,6 @@ export class SoilHealthResponseDto {
   actionPlan: ActionStepDto[];
   mapLayers: MapLayersDto;
   updatedAt: string;
+  crop?: string;                 // e.g. "RICE" or "WHEAT"
+  indices?: SoilIndicesDto | null;
 }
