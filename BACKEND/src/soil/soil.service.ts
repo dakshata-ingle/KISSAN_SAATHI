@@ -1,501 +1,400 @@
-// src/soil/soil.service.ts
-import { Injectable, BadRequestException } from '@nestjs/common';
+// BACKEND/src/soil/soil.service.ts
+import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
-import { GeocodingService } from '../geocoding/geocoding.service';
+import * as turf from '@turf/turf';
+import { v4 as uuidv4 } from 'uuid';
 
-// 👉 IMPORT YOUR RESPONSE DTO
-import {
-  SoilHealthResponseDto,
-  SoilLayerDto,
-  SoilLayerStatus,
-  NutrientDto,
-  NutrientStatus,
-  ActionStepDto,
-  MapLayersDto,
-} from './dto/soil-health-response.dto';
-
-// quick conversion defaults used to estimate numeric values from percentOfOptimal
-const NUTRIENT_OPTIMAL_VALUES: Record<string, number> = {
-  // units: N,P,K -> kg/ha; micronutrients -> ppm
-  N: 280,
-  P: 15,
-  K: 250,
-  ZN: 1,
-  FE: 5,
-  MN: 3,
-  CU: 1,
-  B: 0.5,
-  S: 10,
-  OC: 0.8, // % SOC (example)
-};
-
-// ---- Internal helper types (service ke andar hi use honge) ----
-type NutrientLevel = 'low' | 'medium' | 'high';
-
-interface DonutBreakdown {
-  low: number;
-  medium: number;
-  high: number;
-  currentLevel: NutrientLevel;
-}
-
-interface DepthValue {
-  depthCm: number;
-  value: number;
-}
-
-interface TimeSeriesByDepth {
-  dates: string[];
-  series: Record<string, number[]>;
-}
-
-// -------------------------------------------------------
-// SoilQueryParams supports country/state/city/village OR lat/lon
-// -------------------------------------------------------
-interface SoilQueryParams {
-  country?: string;
-  state?: string;
-  city?: string;
-  village?: string;
-  lat?: number;
-  lon?: number;
-}
-
-// -------------------------------------------------------
+// DTO import optional if you want typed returns
+// import { SoilHealthResponseDto } from './dto/soil-health-response.dto';
 
 @Injectable()
 export class SoilService {
-  constructor(
-    private readonly http: HttpService,
-    private readonly geocodingService: GeocodingService,
-  ) {}
+  private readonly logger = new Logger(SoilService.name);
 
-  // -------------------------------------------------------
-  // Helper for lat/lon directly (used by /soil-health?lat=&lon=)
-  // -------------------------------------------------------
-  async getSoilAnalysisByCoords(
-    lat: number,
-    lon: number,
-  ): Promise<SoilHealthResponseDto> {
-    return this.getSoilAnalysis({ lat, lon });
-  }
+  private readonly SOILGRIDS_URL = 'https://rest.isric.org/soilgrids/v2.0/properties/query';
+  private readonly SENTINELHUB_URL = process.env.SENTINELHUB_PROCESS_URL || 'https://services.sentinel-hub.com/api/v1/process';
+  private readonly SENTINELHUB_TOKEN = process.env.SENTINELHUB_TOKEN || '';
+  private readonly ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://localhost:8000/predict';
 
-  // -------------------------------------------------------
-  // MAIN ENTRY: returns SoilHealthResponseDto (PM format)
-  // -------------------------------------------------------
-  async getSoilAnalysis(
-    params: SoilQueryParams,
-  ): Promise<SoilHealthResponseDto> {
-    const { lat, lon, resolvedName } = await this.resolveLocation(params);
+  // In-memory job store for demo. Replace with DB (Postgres/PostGIS) in prod.
+  private jobStore: Record<string, any> = {};
 
-    const url = 'https://api.open-meteo.com/v1/forecast';
+  constructor(private readonly http: HttpService) {}
 
-    const hourlyVariables = [
-      'soil_temperature_0cm',
-      'soil_temperature_6cm',
-      'soil_temperature_18cm',
-      'soil_temperature_54cm',
-      'soil_moisture_0_1cm',
-      'soil_moisture_1_3cm',
-      'soil_moisture_3_9cm',
-      'soil_moisture_9_27cm',
-      'soil_moisture_27_81cm',
-    ].join(',');
+  // -----------------------
+  // Public API (called by controller)
+  // -----------------------
 
-    const { data } = await firstValueFrom(
-      this.http.get(url, {
-        params: {
-          latitude: lat,
-          longitude: lon,
-          hourly: hourlyVariables,
-          timezone: 'auto',
-          forecast_days: 7,
-          past_days: 30,
-        },
-      }),
-    );
+  /**
+   * Return SoilHealthResponseDto-like object for a point (lat, lon).
+   * Uses SoilGrids + placeholder indices + heuristics/ML.
+   */
+  async getSoilAnalysisByCoords(lat: number, lon: number) {
+    try {
+      // Validate inputs
+      if (typeof lat !== 'number' || typeof lon !== 'number' || isNaN(lat) || isNaN(lon)) {
+        throw new HttpException('Invalid coordinates', HttpStatus.BAD_REQUEST);
+      }
 
-    const timezone: string = data.timezone;
-    const times: string[] = data.hourly.time;
-    const lastIndex = times.length - 1;
+      // Build a small point GeoJSON for reuse with aggregator
+      const pointGeom = turf.point([lon, lat]);
 
-    // Current depth-wise values
-    const temperatureByDepth: DepthValue[] = [
-      { depthCm: 0, value: data.hourly.soil_temperature_0cm[lastIndex] },
-      { depthCm: 6, value: data.hourly.soil_temperature_6cm[lastIndex] },
-      { depthCm: 18, value: data.hourly.soil_temperature_18cm[lastIndex] },
-      { depthCm: 54, value: data.hourly.soil_temperature_54cm[lastIndex] },
-    ];
+      // Soil baseline from SoilGrids (centroid point)
+      const soilBaseline = await this.fetchSoilGrids(lon, lat);
 
-    const moistureByDepth: DepthValue[] = [
-      { depthCm: 0, value: data.hourly.soil_moisture_0_1cm[lastIndex] * 100 },
-      { depthCm: 2, value: data.hourly.soil_moisture_1_3cm[lastIndex] * 100 },
-      { depthCm: 6, value: data.hourly.soil_moisture_3_9cm[lastIndex] * 100 },
-      { depthCm: 18, value: data.hourly.soil_moisture_9_27cm[lastIndex] * 100 },
-      { depthCm: 48, value: data.hourly.soil_moisture_27_81cm[lastIndex] * 100 },
-    ];
+      // Sentinel indices aggregation — for demo returns placeholders
+      const indicesSummary = await this.fetchSentinelIndices(pointGeom, {});
 
-    // Nutrient donut-style health
-    const healthOverview = this.deriveSoilHealth(
-      temperatureByDepth,
-      moistureByDepth,
-    );
+      // DEM & Weather connectors - placeholders/extend these
+      const dem = { elevation: null, slope: null };
+      const weather = { rainfall_30d: null, rainfall_90d: null };
 
-    // 👉 1) Build thermogram array (SoilLayerDto[])
-    const thermogram: SoilLayerDto[] = this.buildThermogram(
-      temperatureByDepth,
-      moistureByDepth,
-    );
+      // Assemble features
+      const features = this.assembleFeatures(soilBaseline, indicesSummary, dem, weather, { areaHectares: 0.0, cropType: null });
 
-    // 👉 2) Map donut health to NutrientDto[]
-    const nutrients: NutrientDto[] = this.buildNutrientsFromHealth(
-      healthOverview,
-    );
+      // Try ML then heuristics
+      let derivedEstimates: Record<string, any> = {};
+      try {
+        const mlResp = await firstValueFrom(this.http.post(this.ML_SERVICE_URL, features));
+        if (mlResp && mlResp.data && mlResp.data.success && mlResp.data.predictions) {
+          derivedEstimates = mlResp.data.predictions;
+          for (const k of Object.keys(derivedEstimates)) derivedEstimates[k].method = derivedEstimates[k].method || 'ml';
+        } else {
+          this.logger.warn('ML returned invalid response - using heuristics');
+          derivedEstimates = this.runHeuristics(features);
+        }
+      } catch (err) {
+        this.logger.warn('ML call failed in getSoilAnalysisByCoords: ' + (err?.message || err));
+        derivedEstimates = this.runHeuristics(features);
+      }
 
-    // 👉 3) Build basic action plan based on health
-    const actionPlan: ActionStepDto[] = this.buildActionPlan(
-      healthOverview,
-      timezone,
-    );
+      // Confidence flags
+      const confidenceFlags = this.buildConfidenceFlags(derivedEstimates);
 
-    // 👉 4) Map layers (abhi ke liye placeholders, baad me NDVI etc. plug karoge)
-    const mapLayers: MapLayersDto = {
-      ndviTileUrl: undefined,
-      moistureTileUrl: undefined,
-      pMapTileUrl: undefined,
-      kMapTileUrl: undefined,
-      vraGeoJson: null,
-    };
+      // Synthesize recommendation
+      const overallConfNumeric = this.averageConfidence(derivedEstimates);
+      const recommendation = this.makeRecommendation(derivedEstimates, overallConfNumeric);
 
-    // ---------- NEW: simple crop guess and indices placeholder ----------
-    const now = new Date();
-    const month = now.getUTCMonth() + 1; // 1-12
-    const cropGuess = month >= 6 && month <= 10 ? 'RICE' : 'WHEAT';
-
-    const indices = {
-      ndvi: null,
-      ndre: null,
-      evi: null,
-      ndwi: null,
-      savi: null,
-      vari: null,
-      soilOrganicCarbon: null,
-      landSurfaceTemp: null,
-    };
-
-    const response: SoilHealthResponseDto = {
-      location: {
-        name: resolvedName,
-        latitude: lat,
-        longitude: lon,
-      },
-      thermogram,
-      nutrients,
-      actionPlan,
-      mapLayers,
-      updatedAt: new Date().toISOString(),
-
-      // added fields
-      crop: cropGuess,
-      indices,
-    };
-
-    return response;
-  }
-
-  // -------------------------------------------------------
-  // Location resolution logic
-  // -------------------------------------------------------
-  private async resolveLocation(params: SoilQueryParams) {
-    const { country, state, city, village, lat, lon } = params;
-
-    if (country || state || city || village) {
-      const parts = [village, city, state, country].filter(Boolean);
-      const locationQuery = parts.join(', ');
-
-      const { latitude, longitude, displayName } =
-        await this.geocodingService.geocodeCity(locationQuery);
-
-      return { lat: latitude, lon: longitude, resolvedName: displayName };
-    }
-
-    if (lat == null || lon == null) {
-      throw new BadRequestException(
-        'Provide either country/state/city/village or lat/lon',
-      );
-    }
-
-    return {
-      lat,
-      lon,
-      resolvedName: `${lat}, ${lon}`,
-    };
-  }
-
-  // -------------------------------------------------------
-  // Thermogram builder – converts depths into SoilLayerDto[]
-  // -------------------------------------------------------
-  private buildThermogram(
-    temps: DepthValue[],
-    moistures: DepthValue[],
-  ): SoilLayerDto[] {
-    const findMoist = (depthCm: number) =>
-      moistures.find((m) => m.depthCm === depthCm)?.value ?? null;
-
-    const depthLabels: Record<number, string> = {
-      0: '0–1 cm',
-      2: '1–3 cm',
-      6: '3–9 cm',
-      18: '9–27 cm',
-      48: '27–81 cm',
-    };
-
-    const layers: SoilLayerDto[] = temps.map((t) => {
-      const moisture = findMoist(t.depthCm);
-      const status = this.getLayerStatus(t.value, moisture);
-
-      return {
-        depthLabel: depthLabels[t.depthCm] ?? `${t.depthCm} cm`,
-        temperature: t.value,
-        moisture,
-        status,
+      // Build response object (matches SoilHealthResponseDto shape)
+      const resp = {
+        centroid: { lon, lat },
+        areaHectares: 0.0,
+        soilBaseline,
+        indicesSummary,
+        derivedEstimates,
+        recommendation,
+        confidenceFlags,
       };
-    });
 
-    // Add moisture-only depth 48cm if not already included
-    if (!layers.find((l) => l.depthLabel === depthLabels[48])) {
-      const m48 = moistures.find((m) => m.depthCm === 48);
-      if (m48) {
-        layers.push({
-          depthLabel: depthLabels[48],
-          temperature: null,
-          moisture: m48.value,
-          status: this.getLayerStatus(null, m48.value),
-        });
-      }
+      return resp;
+    } catch (err) {
+      this.logger.error('getSoilAnalysisByCoords failed: ' + (err?.message || err));
+      if (err instanceof HttpException) throw err;
+      throw new HttpException('Failed to compute soil analysis', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  /**
+   * Create a soil assessment job for a provided GeoJSON area.
+   * For demo: processes synchronously and stores result in memory.
+   * In production: enqueue job to queue (Bull/Redis) and return jobId immediately.
+   */
+  async createAssessment(payload: any) {
+    if (!payload || !payload.area) {
+      throw new HttpException('Payload must include area (GeoJSON)', HttpStatus.BAD_REQUEST);
     }
 
-    return layers;
+    const jobId = uuidv4();
+    // store job meta (processing)
+    this.jobStore[jobId] = { jobId, status: 'processing', createdAt: new Date().toISOString() };
+
+    // Synchronous processing for demo (dangerous for huge polygons)
+    try {
+      const result = await this.processAssessmentSync(jobId, payload);
+      // update store
+      this.jobStore[jobId] = { jobId, status: 'completed', result, updatedAt: new Date().toISOString() };
+      return { jobId, status: 'completed', result };
+    } catch (err) {
+      this.jobStore[jobId] = { jobId, status: 'failed', error: err?.message || String(err) };
+      this.logger.error('createAssessment failed: ' + (err?.message || err));
+      throw new HttpException('Assessment failed: ' + (err?.message || err), HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 
-  private getLayerStatus(
-    temperature: number | null,
-    moisture: number | null,
-  ): SoilLayerStatus {
-    // Simple heuristic: sirf rough visualization ke liye
-    if (moisture == null && temperature == null) return 'BLUE';
-
-    const moist = moisture ?? 50;
-    const temp = temperature ?? 25;
-
-    if (moist >= 40 && moist <= 80 && temp >= 18 && temp <= 32) return 'GREEN';
-    if (moist >= 25 && moist < 40) return 'GOLD';
-    if (moist < 25) return 'RED';
-    return 'BLUE';
+  /**
+   * Retrieve previously computed assessment by jobId from in-memory store (demo).
+   * Replace with DB lookup in production.
+   */
+  async getAssessment(jobId: string) {
+    if (!jobId) throw new HttpException('jobId required', HttpStatus.BAD_REQUEST);
+    const job = this.jobStore[jobId];
+    if (!job) throw new HttpException('Job not found', HttpStatus.NOT_FOUND);
+    return job;
   }
 
-  // -------------------------------------------------------
-  // Nutrient health: same logic as pehle, but internal
-  // -------------------------------------------------------
-  private deriveSoilHealth(
-    temps: DepthValue[],
-    moistures: DepthValue[],
-  ): {
-    nitrogen: DonutBreakdown;
-    phosphorus: DonutBreakdown;
-    potassium: DonutBreakdown;
-    zinc: DonutBreakdown;
-  } {
-    const surfaceTemp = temps.find((t) => t.depthCm === 0)?.value ?? 25;
-    const rootMoist =
-      moistures.find((m) => m.depthCm === 18)?.value ??
-      moistures[moistures.length - 1]?.value ??
-      60;
+  // -----------------------
+  // Internal helpers
+  // -----------------------
 
-    const moistureScore = Math.min(100, Math.max(0, rootMoist));
-    const tempScore = Math.min(
-      100,
-      Math.max(0, (30 - Math.abs(surfaceTemp - 25)) * 4),
-    );
+  /** Synchronous processing used by createAssessment demo */
+  private async processAssessmentSync(jobId: string, payload: any) {
+    // accept either Point or Polygon; compute centroid for SoilGrids and indices aggregation
+    const geom = payload.area;
+    let centroidCoords: number[] | null = null;
 
-    const baseScore = (moistureScore * 0.6 + tempScore * 0.4) / 100;
+    try {
+      const centroid = turf.centroid(geom);
+      centroidCoords = centroid.geometry.coordinates; // [lon, lat]
+    } catch (err) {
+      throw new Error('Invalid GeoJSON area provided');
+    }
 
-    const makeDonut = (factor: number): DonutBreakdown => {
-      const score = Math.max(0, Math.min(1, baseScore * factor));
+    const [lon, lat] = centroidCoords;
+    const areaSqMeters = turf.area(geom);
+    const areaHectares = areaSqMeters / 10000.0;
 
-      let currentLevel: NutrientLevel;
-      if (score < 0.33) currentLevel = 'low';
-      else if (score < 0.66) currentLevel = 'medium';
-      else currentLevel = 'high';
+    // SoilGrids baseline
+    const soilBaseline = await this.fetchSoilGrids(lon, lat);
 
-      const high = Math.round(score * 40 + 20);
-      const medium = Math.round(60 - high / 2);
-      const low = 100 - (high + medium);
+    // Sentinel indices (placeholder or real)
+    const indicesSummary = await this.fetchSentinelIndices(geom, payload);
 
-      return { low, medium, high, currentLevel };
+    // DEM & weather placeholders
+    const dem = { elevation: null, slope: null };
+    const weather = { rainfall_30d: null, rainfall_90d: null };
+
+    // Assemble features
+    const features = this.assembleFeatures(soilBaseline, indicesSummary, dem, weather, { areaHectares, cropType: payload.cropType });
+
+    // ML call with fallback
+    let derivedEstimates: Record<string, any> = {};
+    try {
+      const mlResp = await firstValueFrom(this.http.post(this.ML_SERVICE_URL, features));
+      if (mlResp && mlResp.data && mlResp.data.success && mlResp.data.predictions) {
+        derivedEstimates = mlResp.data.predictions;
+        for (const k of Object.keys(derivedEstimates)) derivedEstimates[k].method = derivedEstimates[k].method || 'ml';
+      } else {
+        this.logger.warn('ML returned invalid response in processAssessmentSync - using heuristics');
+        derivedEstimates = this.runHeuristics(features);
+      }
+    } catch (err) {
+      this.logger.warn('ML call failed in processAssessmentSync: ' + (err?.message || err));
+      derivedEstimates = this.runHeuristics(features);
+    }
+
+    const confidenceFlags = this.buildConfidenceFlags(derivedEstimates);
+    const overallConfNumeric = this.averageConfidence(derivedEstimates);
+    const recommendation = this.makeRecommendation(derivedEstimates, overallConfNumeric);
+
+    const dto = {
+      jobId,
+      status: 'completed',
+      centroid: { lon, lat },
+      areaHectares,
+      soilBaseline,
+      indicesSummary,
+      derivedEstimates,
+      recommendation,
+      confidenceFlags,
+    };
+
+    return dto;
+  }
+
+  /** SoilGrids REST point query */
+  private async fetchSoilGrids(lon: number, lat: number) {
+    try {
+      const url = `${this.SOILGRIDS_URL}?lon=${lon}&lat=${lat}`;
+      const res = await firstValueFrom(this.http.get(url));
+      return this.parseSoilGridsResponse(res.data);
+    } catch (err) {
+      this.logger.warn('fetchSoilGrids failed: ' + (err?.message || err));
+      return {
+        pH: { value: null, source: 'SoilGrids' },
+        organicCarbon: { value: null, unit: '%', source: 'SoilGrids' },
+        clayPct: null,
+        siltPct: null,
+        sandPct: null,
+      };
+    }
+  }
+
+  /** Parse SoilGrids response into simple 0-30cm aggregates (approx) */
+  private parseSoilGridsResponse(resp: any) {
+    const props = resp?.properties ?? {};
+    const pickLayerMean = (propName: string) => {
+      const entry = props[propName];
+      if (!entry || !entry.values) return null;
+      const vals = entry.values.filter((v) => v.value !== null && !isNaN(v.value)).map((v) => v.value);
+      if (!vals.length) return null;
+      return vals.reduce((a, b) => a + b, 0) / vals.length;
     };
 
     return {
-      nitrogen: makeDonut(1.0),
-      phosphorus: makeDonut(0.9),
-      potassium: makeDonut(1.1),
-      zinc: makeDonut(0.8),
+      pH: { value: pickLayerMean('phh2o'), depthCm: 0, source: 'SoilGrids' },
+      organicCarbon: { value: pickLayerMean('soc'), unit: '%', source: 'SoilGrids' },
+      clayPct: pickLayerMean('clay'),
+      siltPct: pickLayerMean('silt'),
+      sandPct: pickLayerMean('sand'),
     };
   }
 
-  // -------------------------------------------------------
-  // Convert donut health → NutrientDto[] (for UI)
-  // -------------------------------------------------------
-  private buildNutrientsFromHealth(
-    overview: ReturnType<typeof this.deriveSoilHealth>,
-  ): NutrientDto[] {
-    const mapLevelToStatus = (level: NutrientLevel): NutrientStatus => {
-      if (level === 'low') return 'DEFICIENT';
-      if (level === 'medium') return 'MONITOR';
-      return 'GOOD';
-    };
-    
-    // helper: convert percentOfOptimal -> numeric value using defaults above
-    const approxValueFromPct = (code: string | undefined, pct: number | null) => {
-      if (pct == null) return null;
-      const base = NUTRIENT_OPTIMAL_VALUES[code ?? ""] ?? null;
-      if (base == null) return Math.round(pct); // fallback: return percent itself
-      // for example, pct 70 => 0.7 * base
-      // use rounding for nicer numbers
-      if (code === 'OC') {
-        // SOC stored as percent; percentOfOptimal is 0-100 -> we convert to percent
-        // assume base is % value
-        return Number(((pct / 100) * base).toFixed(2));
-      }
-      return Math.round((pct / 100) * base);
+  /**
+   * Sentinel Hub process API evalscript call.
+   * NOTE: Often returns binary (GeoTIFF/PNG). For quick demo, this returns placeholder summary.
+   * Replace with a method that either:
+   *  - requests server-side statistics from Sentinel Hub (if available in your plan), or
+   *  - downloads GeoTIFF, reads raster and computes polygon aggregates (node geotiff or Python rasterio).
+   */
+  private async fetchSentinelIndices(geom: any, payload: any) {
+    const now = new Date();
+    const toDate = now.toISOString();
+    const fromDate = payload.fromDate || new Date(now.getTime() - 90 * 24 * 3600 * 1000).toISOString();
+
+    const processScript = `// Evalscript to compute NDVI and NDRE
+function setup() {
+  return {
+    input: [{ bands: ["B04","B05","B08","B11"] }],
+    output: [{ id:"ndvi", bands:1, sampleType:"FLOAT32" },{ id:"ndre", bands:1, sampleType:"FLOAT32" }]
+  };
+}
+function evaluatePixel(sample) {
+  var ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04);
+  var ndre = (sample.B08 - sample.B05) / (sample.B08 + sample.B05);
+  return { ndvi:[ndvi], ndre:[ndre] };
+}`;
+
+    const body = {
+      input: {
+        bounds: geom,
+        data: [
+          {
+            type: 'sentinel-2-l2a',
+            dataFilter: { timeRange: { from: fromDate, to: toDate } },
+            processing: { atmosphericCorrection: 'none' },
+          },
+        ],
+      },
+      process: { script: processScript },
     };
 
-    return [
-      {
-        code: 'N',
-        name: 'Nitrogen',
-        value: approxValueFromPct('N', overview.nitrogen.high),
-        unit: 'kg/ha',
-        percentOfOptimal: overview.nitrogen.high,
-        status: mapLevelToStatus(overview.nitrogen.currentLevel),
-      },
-      {
-        code: 'P',
-        name: 'Phosphorus',
-        value: approxValueFromPct('P', overview.phosphorus.high),
-        unit: 'kg/ha',
-        percentOfOptimal: overview.phosphorus.high,
-        status: mapLevelToStatus(overview.phosphorus.currentLevel),
-      },
-      {
-        code: 'K',
-        name: 'Potassium',
-        value: approxValueFromPct('K', overview.potassium.high),
-        unit: 'kg/ha',
-        percentOfOptimal: overview.potassium.high,
-        status: mapLevelToStatus(overview.potassium.currentLevel),
-      },
-      {
-        code: 'ZN',
-        name: 'Zinc',
-        value: approxValueFromPct('ZN', overview.zinc.high),
-        unit: 'ppm',
-        percentOfOptimal: overview.zinc.high,
-        status: mapLevelToStatus(overview.zinc.currentLevel),
-      },
-    ];
+    try {
+      const headers = {
+        Authorization: `Bearer ${this.SENTINELHUB_TOKEN}`,
+        'Content-Type': 'application/json',
+      };
+      // NOTE: responseType arraybuffer - sentinel returns imagery; we don't parse here.
+      const res = await firstValueFrom(this.http.post(this.SENTINELHUB_URL, body, { headers, responseType: 'arraybuffer' }));
+      this.logger.log('SentinelHub call completed (bytes). Placeholder aggregation returned for demo.');
+      return {
+        summary: {
+          ndvi_mean: 0.42,
+          ndvi_std: 0.12,
+          ndvi_trend_30d: -0.01,
+          ndre_mean: 0.18,
+          bsi_mean: 0.05,
+          valid_obs_count: 6,
+          cloud_coverage_pct: 12,
+        },
+      };
+    } catch (err) {
+      this.logger.warn('fetchSentinelIndices failed: ' + (err?.message || err));
+      return {
+        summary: {
+          ndvi_mean: null,
+          ndvi_std: null,
+          ndvi_trend_30d: null,
+          ndre_mean: null,
+          bsi_mean: null,
+          valid_obs_count: 0,
+          cloud_coverage_pct: null,
+        },
+      };
+    }
   }
 
-  // -------------------------------------------------------
-  // Simple rule-based action plan
-  // -------------------------------------------------------
-  private buildActionPlan(
-    overview: ReturnType<typeof this.deriveSoilHealth>,
-    timezone: string,
-  ): ActionStepDto[] {
-    const steps: ActionStepDto[] = [];
-    const now = new Date().toLocaleString('en-IN', { timeZone: timezone });
-
-    const anyDeficient =
-      overview.nitrogen.currentLevel === 'low' ||
-      overview.phosphorus.currentLevel === 'low' ||
-      overview.potassium.currentLevel === 'low' ||
-      overview.zinc.currentLevel === 'low';
-
-    if (anyDeficient) {
-      steps.push({
-        id: 'nutrient-correction',
-        priority: 1,
-        title: 'Nutrient imbalance detected',
-        description:
-          'Apply recommended NPK and micronutrient dose in split applications. Avoid over-irrigation after fertilizer use.',
-        category: 'NUTRIENT',
-        zoneId: 'Field',
-      });
-    }
-
-    steps.push({
-      id: 'moisture-management',
-      priority: 2,
-      title: 'Manage soil moisture',
-      description:
-        'Maintain light, frequent irrigation to keep root-zone moisture between 40–70%. Avoid waterlogging and deep cracks.',
-      category: 'MOISTURE',
-    });
-
-    steps.push({
-      id: 'monitor-next-7-days',
-      priority: 3,
-      title: 'Monitor soil condition',
-      description: `Re-check soil status and satellite indices in the next 7 days. Last analysis time: ${now}.`,
-      category: 'GENERAL',
-    });
-
-    return steps;
+  /** Assemble features for ML or heuristics */
+  private assembleFeatures(soilBaseline: any, indices: any, dem: any, weather: any, meta: any) {
+    const f: any = {};
+    f.pH_0_30 = soilBaseline.pH?.value ?? null;
+    f.soc_0_30 = soilBaseline.organicCarbon?.value ?? null;
+    f.clay = soilBaseline.clayPct ?? null;
+    f.silt = soilBaseline.siltPct ?? null;
+    f.sand = soilBaseline.sandPct ?? null;
+    f.ndvi_mean_90d = indices?.summary?.ndvi_mean ?? null;
+    f.ndvi_std_90d = indices?.summary?.ndvi_std ?? null;
+    f.ndvi_trend_30d = indices?.summary?.ndvi_trend_30d ?? null;
+    f.ndre_mean_90d = indices?.summary?.ndre_mean ?? null;
+    f.bsi_mean_90d = indices?.summary?.bsi_mean ?? null;
+    f.valid_obs_count = indices?.summary?.valid_obs_count ?? 0;
+    f.cloud_pct = indices?.summary?.cloud_coverage_pct ?? null;
+    f.area_ha = meta.areaHectares ?? null;
+    f.cropType = meta.cropType ?? null;
+    f.elevation = dem?.elevation ?? null;
+    f.rainfall_30d = weather?.rainfall_30d ?? null;
+    return f;
   }
 
-  // -------------------------------------------------------
-  // (Optional) You can still keep buildDailySeries if needed later
-  // -------------------------------------------------------
-  private buildDailySeries(
-    times: string[],
-    seriesByDepth: Record<string, number[]>,
-    numDays: number,
-    usePast: boolean,
-  ): TimeSeriesByDepth {
-    const dates = times.map((t) => t.slice(0, 10));
+  /** Heuristics fallback returning all 12 nutrients conservatively */
+  private runHeuristics(features: any) {
+    const out: Record<string, any> = {};
+    const soc = features.soc_0_30 ?? 0;
+    const ndvi = features.ndvi_mean_90d ?? 0;
 
-    const uniqueDates: string[] = [];
-    for (const d of dates) {
-      if (uniqueDates[uniqueDates.length - 1] !== d) {
-        uniqueDates.push(d);
-      }
+    if (soc < 0.6 && ndvi < 0.35) {
+      out['N'] = { value: 120, unit: 'kg/ha', confidence: 0.45, method: 'heuristic' };
+    } else {
+      out['N'] = { value: 200, unit: 'kg/ha', confidence: 0.6, method: 'heuristic' };
     }
 
-    const selectedDates = usePast
-      ? uniqueDates.slice(-numDays - 1, -1)
-      : uniqueDates.slice(-numDays);
+    out['P'] = { value: 25, unit: 'kg/ha', confidence: 0.4, method: 'heuristic' };
+    out['K'] = { value: 180, unit: 'kg/ha', confidence: 0.45, method: 'heuristic' };
+    out['OC'] = { value: soc || 0.8, unit: '%', confidence: soc ? 0.7 : 0.4, method: 'heuristic' };
+    out['pH'] = { value: features.pH_0_30 ?? 6.5, unit: 'pH', confidence: features.pH_0_30 ? 0.8 : 0.4, method: 'heuristic' };
+    out['EC'] = { value: 0.5, unit: 'dS/m', confidence: 0.5, method: 'heuristic' };
+    out['S'] = { value: 12, unit: 'mg/kg', confidence: 0.45, method: 'heuristic' };
+    out['Fe'] = { value: 35, unit: 'mg/kg', confidence: 0.6, method: 'heuristic' };
+    out['Zn'] = { value: 1.5, unit: 'mg/kg', confidence: 0.5, method: 'heuristic' };
+    out['Cu'] = { value: 0.8, unit: 'mg/kg', confidence: 0.5, method: 'heuristic' };
+    out['B'] = { value: 0.5, unit: 'mg/kg', confidence: 0.45, method: 'heuristic' };
+    out['Mn'] = { value: 40, unit: 'mg/kg', confidence: 0.6, method: 'heuristic' };
 
-    const resultSeries: Record<string, number[]> = {};
-    Object.keys(seriesByDepth).forEach((k) => (resultSeries[k] = []));
+    return out;
+  }
 
-    for (const day of selectedDates) {
-      const idxs: number[] = [];
-      dates.forEach((d, i) => {
-        if (d === day) idxs.push(i);
-      });
-
-      Object.entries(seriesByDepth).forEach(([key, values]) => {
-        const mean =
-          idxs.reduce((sum, i) => sum + values[i], 0) / (idxs.length || 1);
-        resultSeries[key].push(Number(mean.toFixed(2)));
-      });
+  /** Build qualitative confidence flags */
+  private buildConfidenceFlags(derived: Record<string, any>) {
+    const details: Record<string, string> = {};
+    let sum = 0;
+    let cnt = 0;
+    for (const k of Object.keys(derived)) {
+      const c = derived[k].confidence ?? 0.4;
+      sum += c; cnt++;
+      details[k] = c >= 0.7 ? 'high' : c >= 0.5 ? 'medium' : 'low';
     }
+    const overall = cnt ? (sum / cnt) : 0;
+    const overallLabel = overall >= 0.7 ? 'high' : overall >= 0.5 ? 'medium' : 'low';
+    return { overall: overallLabel, details };
+  }
 
-    return {
-      dates: selectedDates,
-      series: resultSeries,
-    };
+  /** Average numeric confidence */
+  private averageConfidence(derived: Record<string, any>) {
+    let sum = 0; let cnt = 0;
+    for (const k of Object.keys(derived)) {
+      const c = derived[k].confidence ?? 0.4;
+      sum += c; cnt++;
+    }
+    return cnt ? sum / cnt : 0;
+  }
+
+  /** Recommendation synth */
+  private makeRecommendation(derived: Record<string, any>, overallConf: number) {
+    const lowConf = overallConf < 0.6;
+    let rec = lowConf ? 'Provisional estimates — recommend laboratory confirmation.' : 'Provisional recommendations based on model.';
+    if (derived['N'] && derived['P'] && derived['K']) {
+      rec += ` Estimated N:${Math.round(derived['N'].value)} kg/ha, P:${Math.round(derived['P'].value)} kg/ha, K:${Math.round(derived['K'].value)} kg/ha.`;
+    }
+    return rec;
   }
 }

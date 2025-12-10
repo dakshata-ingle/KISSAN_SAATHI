@@ -1,17 +1,13 @@
-// src/soil/soil.module.ts
+// BACKEND/src/soil/soil.module.ts
 import { Module } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
-import { SoilController } from './soil.controller';
 import { SoilService } from './soil.service';
-import { GeocodingModule } from '../geocoding/geocoding.module';
+import { SoilController } from './soil.controller';
 
 @Module({
-  imports: [
-    HttpModule,        // required for Open-Meteo soil API calls
-    GeocodingModule,   // required because SoilService injects GeocodingService
-  ],
-  controllers: [SoilController],
+  imports: [HttpModule],
   providers: [SoilService],
+  controllers: [SoilController],
   exports: [SoilService],
 })
 export class SoilModule {}
