@@ -4,7 +4,8 @@
 import React, { useEffect, useState, useMemo } from "react";
 import SoilHealthSmartCard from "./SoilHealthSmartCard";
 import "./soil-health.css";
-
+import SoilPredictionCard from "./SoilPredictionCard";
+import SoilPredictionTable from "./SoilPredictionTable";
 /**
  * Soil page: connected to backend.
  * Uses updated SoilHealthResponseDto from backend:
@@ -160,8 +161,8 @@ function SoilDepthListCard({ depths, title, unitLabel, lastUpdated }: { depths: 
   return (
     <div className="bg-white rounded-lg shadow p-4 h-full">
       <div className="flex items-start gap-4">
-        <div className="w-36 flex-shrink-0">
-          <img src="/images/soil-stack.jpg" alt="soil stack" className="w-full h-auto object-contain" />
+        <div style={{ width: "180px", minWidth: "240px" }}>
+          <img src="/images/soil-stack.png" alt="soil stack" style={{ width: "100%", height: "auto", objectFit: "contain" }} />
         </div>
         <div className="flex-1">
           <div className="flex items-center justify-between mb-2">
@@ -325,6 +326,9 @@ export default function SoilPage() {
   const [moistureForecast, setMoistureForecast] = useState<any[]>(MOISTURE_FORECAST);
   const [currentCrop, setCurrentCrop] = useState<string>("RICE");
   const [lastUpdated, setLastUpdated] = useState<string | undefined>(undefined);
+
+  // NEW: predictions state (page-level)
+  const [predictions, setPredictions] = useState<Record<string, any> | null>(null);
 
   const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
 
@@ -526,6 +530,9 @@ export default function SoilPage() {
       }
 
       setLastUpdated(raw?.updatedAt ?? new Date().toISOString());
+
+      // NEW: set page-level predictions so SoilPredictionTable can render them
+      setPredictions(raw?.predictions ?? null);
     } catch (err: any) {
       console.error("fetchSoil error:", err);
 
@@ -593,7 +600,7 @@ export default function SoilPage() {
         </div>
       </div>
 
-      {/* NOTE: location & polygon handled by backend; UI allows polygon later */}
+      {/* NOTE: location & polygon handled by backend; UI allows polygon later */} 
       <div className="mb-4 grid grid-cols-1 md:grid-cols-3 gap-3">
         <div className="col-span-2">
           <div className="text-sm text-gray-600 mb-2">
@@ -672,6 +679,19 @@ export default function SoilPage() {
         currentCrop={(currentCrop as any) ?? "RICE"}
       />
 
+      {/* ===== Prediction controls & results (added) ===== */}
+      <div className="mt-6 space-y-4">
+        {/* SoilPredictionCard can fetch independently and also notify page via onResult */}
+        <SoilPredictionCard onResult={(data) => setPredictions(data?.predictions ?? null)} />
+
+        {/* If page-level fetch produced predictions, show them in a table */}
+        {predictions && (
+          <div>
+            <SoilPredictionTable predictions={predictions} />
+          </div>
+        )}
+      </div>
+
       {/* Temperature & Moisture + Forecasts (restored UI) */}
       <div className="grid grid-cols-12 gap-6 mt-6">
         {/* Left column: Soil Temperature Card */}
@@ -681,8 +701,8 @@ export default function SoilPage() {
           {/* Updated Soil Moisture card: matches Temperature layout */}
           <div className="bg-white rounded-lg shadow p-4 h-full">
             <div className="flex items-start gap-4">
-              <div className="w-36 flex-shrink-0">
-                <img src="/images/soil-stack.jpg" alt="soil stack" className="w-full h-auto object-contain" />
+              <div style={{ width: "180px", minWidth: "240px" }}>
+                <img src="/images/soil-stack.png" alt="soil stack" style={{ width: "100%", height: "auto", objectFit: "contain" }} />
               </div>
               <div className="flex-1">
                 <div className="flex items-center justify-between mb-2">
@@ -692,7 +712,7 @@ export default function SoilPage() {
 
                 <div className="space-y-3">
                   {depths.map((d, i) => (
-                    <div key={i} className="flex items-center justify-between bg-gray-50 px-3 py-2 rounded-md" style={{ minHeight: 44 }}>
+                    <div key={i} className="flex items-center justify-between bg-gray-50 px-3 py-2 rounded-md" >
                       <div className="flex items-center gap-3">
                         <div className="h-2 w-2 rounded-full bg-green-400" />
                         <div className="text-sm text-gray-600">{d.label}</div>
